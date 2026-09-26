@@ -1,4 +1,29 @@
 {
-    "cortex-debug.openocdPath": "D:\\MSYS64\\MINGW64\\BIN\\OPENOCD.EXE",
-    "cortex-debug.armToolchainPath": "D:\\MSYS64\\MINGW64\\BIN"
+    "cortex-debug.armToolchainPath": "C:\\ST\\STM32CubeCLT_1.21.0\\GNU-tools-for-STM32\\bin",
+    "cortex-debug.openocdPath": "C:\\msys64\\mingw64\\bin\\openocd.exe",
+    "files.associations": {
+        "stm32h7xx_hal_def.h": "c",
+        "bsp_usb.h": "c",
+        "usb_device.h": "c",
+        "usbd_cdc.h": "c",
+        "usbd_conf.h": "c",
+        "usbd_desc.h": "c",
+        "usbd_cdc_if.h": "c",
+        "chassis.h": "c",
+        "remote_control.h": "c",
+        "arm_math.h": "c",
+        "can_comm.h": "c",
+        "dji_motor.h": "c",
+        "bsp_log.h": "c",
+        "FreeRTOS.h": "c",
+        "cmsis_os.h": "c",
+        "stm32h723xx.h": "c"
+    },
+    "terminal.integrated.profiles.windows": {
+    "mysys2-mingw64": {
+      "path": "cmd.exe", // 意思是使用cmd作为父进程启动终端
+      "args": ["/c","C:\\msys64\\msys2_shell.cmd -defterm -mingw64 -no-start -here"]
+        // msys2_shell.cmd在msys的安装目录下，这里要改为你自己的目录
+    }
+  }
 }

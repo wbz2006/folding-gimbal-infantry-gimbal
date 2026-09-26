@@ -1,0 +1,73 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "DAPLink: launch",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/Basic_Framework_MC02.elf",
+            "request": "launch",
+            "type": "cortex-debug",
+            "servertype": "openocd",
+            "device": "STM32H723VG",
+            "configFiles": [
+                "${workspaceFolder}/openocd_dap.cfg"
+            ],
+            "svdFile": "${workspaceFolder}/STM32H723.svd",
+            "rtos": "FreeRTOS",
+            "runToEntryPoint": "main",
+            "preLaunchTask": "Build",
+            "showDevDebugOutput": "none",
+            "liveWatch": {
+                "enabled": true,
+                "samplesPerSecond": 4
+            }
+        },
+        {
+            "name": "DAPLink: attach",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/Basic_Framework_MC02.elf",
+            "request": "attach",
+            "type": "cortex-debug",
+            "servertype": "openocd",
+            "device": "STM32H723VG",
+            "configFiles": [
+                "${workspaceFolder}/openocd_dap.cfg"
+            ],
+            "svdFile": "${workspaceFolder}/STM32H723.svd",
+            "rtos": "FreeRTOS",
+            "showDevDebugOutput": "none"
+        },
+        {
+            "name": "J-Link: launch",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/Basic_Framework_MC02.elf",
+            "request": "launch",
+            "type": "cortex-debug",
+            "servertype": "jlink",
+            "device": "STM32H723VG",
+            "interface": "swd",
+            "svdFile": "${workspaceFolder}/STM32H723.svd",
+            "rtos": "FreeRTOS",
+            "runToEntryPoint": "main",
+            "preLaunchTask": "Build",
+            "showDevDebugOutput": "none",
+            "liveWatch": {
+                "enabled": true,
+                "samplesPerSecond": 4
+            }
+        },
+        {
+            "name": "J-Link: attach",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/Basic_Framework_MC02.elf",
+            "request": "attach",
+            "type": "cortex-debug",
+            "servertype": "jlink",
+            "device": "STM32H723VG",
+            "interface": "swd",
+            "svdFile": "${workspaceFolder}/STM32H723.svd",
+            "rtos": "FreeRTOS",
+            "showDevDebugOutput": "none"
+        }
+    ]
+}

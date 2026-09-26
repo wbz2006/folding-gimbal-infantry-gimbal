@@ -139,6 +139,8 @@ void ChassisInit()
 #define RF_CENTER ((HALF_TRACK_WIDTH - CENTER_GIMBAL_OFFSET_X + HALF_WHEEL_BASE - CENTER_GIMBAL_OFFSET_Y) * DEGREE_2_RAD)
 #define LB_CENTER ((HALF_TRACK_WIDTH + CENTER_GIMBAL_OFFSET_X + HALF_WHEEL_BASE + CENTER_GIMBAL_OFFSET_Y) * DEGREE_2_RAD)
 #define RB_CENTER ((HALF_TRACK_WIDTH - CENTER_GIMBAL_OFFSET_X + HALF_WHEEL_BASE + CENTER_GIMBAL_OFFSET_Y) * DEGREE_2_RAD)
+
+#ifdef CHASSIS_DRIVE_MECANUM
 /**
  * @brief 计算每个轮毂电机的输出,正运动学解算
  *        用宏进行预替换减小开销,运动解算具体过程参考教程
@@ -150,7 +152,27 @@ static void MecanumCalculate()
     vt_lb = chassis_vx - chassis_vy - chassis_cmd_recv.wz * LB_CENTER;
     vt_rb = chassis_vx + chassis_vy - chassis_cmd_recv.wz * RB_CENTER;
 }
+#endif
 
+#ifdef CHASSIS_DRIVE_OMNI_X
+#define COS45 0.70710678f
+// 全向轮 X 型排列: 四个轮子距中心等距 (用 LF_CENTER 近似, 四个 CENTER 宏值相等时成立)
+#define OMNI_L (LF_CENTER)
+
+/**
+ * @brief 四轮全向轮运动学解算 (X 型排列, 轮子互成 90°)
+ *
+ * 轮子布局:  RF=45°, LF=135°, LB=225°, RB=315°
+ * 公式: v_i = vx*cos(θ) + vy*sin(θ) - wz*L
+ */
+static void OmniCalculate()
+{
+    vt_rf =  chassis_vx * COS45 + chassis_vy * COS45 + chassis_cmd_recv.wz * OMNI_L;
+    vt_lf = -chassis_vx * COS45 + chassis_vy * COS45 + chassis_cmd_recv.wz * OMNI_L;
+    vt_lb = -chassis_vx * COS45 - chassis_vy * COS45 + chassis_cmd_recv.wz * OMNI_L;
+    vt_rb =  chassis_vx * COS45 - chassis_vy * COS45 + chassis_cmd_recv.wz * OMNI_L;
+}
+#endif
 /**
  * @brief 根据裁判系统和电容剩余容量对输出进行限制并设置电机参考值
  *
@@ -214,11 +236,15 @@ void ChassisTask()
         chassis_cmd_recv.wz = 0;
         break;
     case CHASSIS_FOLLOW_GIMBAL_YAW: // 跟随云台,不单独设置pid,以误差角度平方为速度输出
-        chassis_cmd_recv.wz = -1.5f * chassis_cmd_recv.offset_angle * abs(chassis_cmd_recv.offset_angle);
+        float offset = theta_format(chassis_cmd_recv.offset_angle);
+        chassis_cmd_recv.wz = -50.0f * offset;
+        chassis_cmd_recv.wz = float_constrain(chassis_cmd_recv.wz, -4500.0f, 4500.0f);
         break;
     case CHASSIS_ROTATE: // 自旋,同时保持全向机动;当前wz维持定值,后续增加不规则的变速策略
         chassis_cmd_recv.wz = 4000;
         break;
+    case CHASSIS_FOLDED_ROTATE:
+        
     default:
         break;
     }

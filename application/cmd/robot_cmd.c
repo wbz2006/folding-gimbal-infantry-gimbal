@@ -89,21 +89,8 @@ static void CalcOffsetAngle()
     // 别名angle提高可读性,不然太长了不好看,虽然基本不会动这个函数
     static float angle;
     angle = gimbal_fetch_data.yaw_motor_single_round_angle; // 从云台获取的当前yaw电机单圈角度
-#if YAW_ECD_GREATER_THAN_4096                               // 如果大于180度
-    if (angle > YAW_ALIGN_ANGLE && angle <= 180.0f + YAW_ALIGN_ANGLE)
-        chassis_cmd_send.offset_angle = angle - YAW_ALIGN_ANGLE;
-    else if (angle > 180.0f + YAW_ALIGN_ANGLE)
-        chassis_cmd_send.offset_angle = angle - YAW_ALIGN_ANGLE - 360.0f;
-    else
-        chassis_cmd_send.offset_angle = angle - YAW_ALIGN_ANGLE;
-#else // 小于180度
-    if (angle > YAW_ALIGN_ANGLE)
-        chassis_cmd_send.offset_angle = angle - YAW_ALIGN_ANGLE;
-    else if (angle <= YAW_ALIGN_ANGLE && angle >= YAW_ALIGN_ANGLE - 180.0f)
-        chassis_cmd_send.offset_angle = angle - YAW_ALIGN_ANGLE;
-    else
-        chassis_cmd_send.offset_angle = angle - YAW_ALIGN_ANGLE + 360.0f;
-#endif
+    // 取云台相对底盘的最近角度，避免跨越0/360度时得到接近360度的误差
+    chassis_cmd_send.offset_angle = theta_format(angle - YAW_ALIGN_ANGLE);
 }
 
 /**
@@ -112,23 +99,26 @@ static void CalcOffsetAngle()
  */
 static void RemoteControlSet()
 {
-    // 控制底盘和云台运行模式,云台待添加,云台是否始终使用IMU数据?
-    if (switch_is_down(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[下],底盘跟随云台
+    if (switch_is_down(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[下],小陀螺
     {
         chassis_cmd_send.chassis_mode = CHASSIS_ROTATE;
         gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
     }
-    else if (switch_is_mid(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[中],底盘和云台分离,底盘保持不转动
+    else if (switch_is_mid(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[中],随动
     {
-        chassis_cmd_send.chassis_mode = CHASSIS_NO_FOLLOW;
-        gimbal_cmd_send.gimbal_mode = GIMBAL_FREE_MODE;
+        chassis_cmd_send.chassis_mode = CHASSIS_FOLLOW_GIMBAL_YAW;
+        gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
+    }
+    else if (switch_is_up(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[上],初始状态
+    {
+        chassis_cmd_send.chassis_mode = CHASSIS_NO_FOLLOW;  //CHASSIS_ZERO_FORCE;
+        gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;     //GIMBAL_ZERO_FORCE;
     }
 
     // 云台参数,确定云台控制数据
     if (switch_is_mid(rc_data[TEMP].rc.switch_left)) // 左侧开关状态为[中],视觉模式
     {
-        // 待添加,视觉会发来和目标的误差,同样将其转化为total angle的增量进行控制
-        // ...
+       // 切换为折叠态
     }
     // 左侧开关状态为[下],或视觉未识别到目标,纯遥控器拨杆控制
     if (switch_is_down(rc_data[TEMP].rc.switch_left) || vision_recv_data->target_state == NO_TARGET)
