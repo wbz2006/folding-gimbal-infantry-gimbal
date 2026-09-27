@@ -13,7 +13,6 @@ void MotorControlTask()
     // if(cnt%10==0) //100hz
     DJIMotorControl();
     DMMotorControl();
-    DMMotorMITControl();
     /* 如果有对应的电机则取消注释,可以加入条件编译或者register对应的idx判断是否注册了电机 */
     LKMotorControl();
 

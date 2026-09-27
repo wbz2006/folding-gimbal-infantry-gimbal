@@ -357,6 +357,8 @@ DMMotorInstance *DMMotorInit(Motor_Init_Config_s *config)
         config->controller_param_init_config.speed_feedforward_ptr;
     motor->current_feedforward_ptr =
         config->controller_param_init_config.current_feedforward_ptr;
+    /* 公开模式成员的默认值，应用层初始化后可直接修改。 */
+    motor->control_mode = DMMOTOR_CONTROL_EXTERNAL_IMPEDANCE;
 
     config->can_init_config.can_module_callback = DMMotorDecode;
     config->can_init_config.id = motor;
@@ -450,6 +452,32 @@ void DMMotorChangeFeed(
 }
 
 /**
+ * @brief 设置达妙电机的周期控制模式。
+ *
+ * @param motor 电机实例。
+ * @param control_mode 周期控制模式。
+ */
+void DMMotorSetControlMode(
+    DMMotorInstance *motor,
+    DMMotor_Control_Mode_e control_mode)
+{
+    if (motor == NULL)
+    {
+        return;
+    }
+
+    if (control_mode == DMMOTOR_CONTROL_EXTERNAL_IMPEDANCE ||
+        control_mode == DMMOTOR_CONTROL_MIT)
+    {
+        motor->control_mode = control_mode;
+    }
+    else
+    {
+        LOGERROR("[dm_motor] control mode error, check func param");
+    }
+}
+
+/**
  * @brief 配置完整 MIT 控制参数。
  *
  * @param motor 电机实例。
@@ -508,6 +536,12 @@ void DMMotorControl(void)
     for (size_t i = 0; i < idx; ++i)
     {
         DMMotorInstance *motor = dm_motor_instance[i];
+
+        if (motor->control_mode != DMMOTOR_CONTROL_EXTERNAL_IMPEDANCE)
+        {
+            continue;
+        }
+
         const float pid_output = DMMotorCalculateExternalOutput(motor);
         const float torque_des = pid_output + motor->mit_config.torque_des;
 
@@ -527,6 +561,11 @@ void DMMotorMITControl(void)
     for (size_t i = 0; i < idx; ++i)
     {
         DMMotorInstance *motor = dm_motor_instance[i];
+
+        if (motor->control_mode != DMMOTOR_CONTROL_MIT)
+        {
+            continue;
+        }
 
         DMMotorSendMIT(
             motor,

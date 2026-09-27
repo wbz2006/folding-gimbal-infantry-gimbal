@@ -114,8 +114,6 @@ void GimbalInit()
                 .IntegralLimit = 2500,
                 .MaxOut = 20000,
             },
-            .other_angle_feedback_ptr = &gimbal_IMU_data->Pitch,
-            .other_speed_feedback_ptr = (&gimbal_IMU_data->Gyro[0]),
         },
         .controller_setting_init_config = {
             .angle_feedback_source = MOTOR_FEED,
@@ -130,6 +128,7 @@ void GimbalInit()
     yaw_motor = DMMotorInit(&yaw_config);
     upper_pitch_motor = DMMotorInit(&upper_pitch_config);
     lower_pitch_motor = DMMotorInit(&lower_pitch_config);
+    lower_pitch_motor->control_mode = DMMOTOR_CONTROL_MIT;
 
     gimbal_pub = PubRegister("gimbal_feed", sizeof(Gimbal_Upload_Data_s));
     gimbal_sub = SubRegister("gimbal_cmd", sizeof(Gimbal_Ctrl_Cmd_s));

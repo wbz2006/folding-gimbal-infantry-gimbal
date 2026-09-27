@@ -4,12 +4,28 @@
 
 ## 设计目标
 
-该库把达妙 MIT 报文发送能力和上层控制策略分开，提供两种互斥的周期控制入口：
+该库把达妙 MIT 报文发送能力和上层控制策略分开，支持每台电机独立选择控制模式：
 
-1. `DMMotorControl()`：IMU 外部阻抗控制。
-2. `DMMotorMITControl()`：IMU 外环 + DM 内部 MIT 位置速度环控制。
+1. `DMMOTOR_CONTROL_EXTERNAL_IMPEDANCE`：IMU 外部阻抗控制。
+2. `DMMOTOR_CONTROL_MIT`：IMU 外环或轨迹规划 + DM 内部 MIT 位置速度环控制。
 
-不要在同一个控制周期内同时调用这两个函数，否则同一台电机会连续收到两种不同控制目标。
+`DMMotorControl()` 只处理外部阻抗模式的电机，`DMMotorMITControl()` 只处理 MIT 模式的电机。
+因此混合使用时，两个函数在同一个控制周期内各调用一次即可；同一台电机不会被两个入口重复发送。
+
+控制模式保存在公开的 `DMMotorInstance::control_mode` 成员中，有两种配置方式：
+
+```c
+/* 方式一：初始化后直接配置实例成员。 */
+lower_pitch_motor->control_mode = DMMOTOR_CONTROL_MIT;
+
+/* 方式二：使用接口配置，适合运行过程中切换。 */
+DMMotorSetControlMode(
+    lower_pitch_motor,
+    DMMOTOR_CONTROL_MIT);
+```
+
+两种方式效果相同。新注册的电机默认使用
+`DMMOTOR_CONTROL_EXTERNAL_IMPEDANCE`。
 
 ## 数据单位
 
@@ -113,6 +129,12 @@ DMMotorInstance *pitch_motor = DMMotorInit(&pitch_config);
 DMMotorSetRef(pitch_motor, target_pitch);
 ```
 
+需要显式设置外部阻抗模式时，可以直接修改实例成员：
+
+```c
+pitch_motor->control_mode = DMMOTOR_CONTROL_EXTERNAL_IMPEDANCE;
+```
+
 控制任务中：
 
 ```c
@@ -132,10 +154,18 @@ DMMotorSetMITRef(pitch_motor, 0.0f, 0.0f, 0.0f, 0.0f, gravity_torque);
 
 ## 模式二：IMU 外环 + MIT 内部位置速度环
 
-调用入口：
+设置模式并配置参数：
 
 ```c
-DMMotorMITControl();
+lower_pitch_motor->control_mode = DMMOTOR_CONTROL_MIT;
+
+DMMotorSetMITRef(
+    lower_pitch_motor,
+    target_motor_position,
+    target_motor_velocity,
+    30.0f,
+    0.8f,
+    gravity_torque);
 ```
 
 该模式不计算驱动内部的外部 PID 链，而是直接发送应用层配置的 MIT 参数：
@@ -149,7 +179,7 @@ DMMotor_MIT_Config_s mit_config = {
     .torque_des = gravity_torque,
 };
 
-DMMotorSetMITConfig(pitch_motor, &mit_config);
+DMMotorSetMITConfig(lower_pitch_motor, &mit_config);
 ```
 
 控制任务中：
@@ -157,6 +187,8 @@ DMMotorSetMITConfig(pitch_motor, &mit_config);
 ```c
 void MotorControlTask(void)
 {
+    /* 外部阻抗电机和 MIT 电机分别过滤处理。 */
+    DMMotorControl();
     DMMotorMITControl();
 }
 ```
@@ -181,7 +213,8 @@ void MotorControlTask(void)
 | 想先快速调通云台 | 先用 `DMMotorControl()` |
 | 想利用 DM 内部刚度 | 再评估 `DMMotorMITControl()` |
 
-不要在 `DMMotorControl()` 中打开较大的 MIT `kp/kd`。该函数会主动把它们置零，就是为了避免外部 IMU 位置环和内部电机位置环同时高增益工作。
+不要在同一台电机上同时配置外部高增益 IMU 位置环和 MIT 内部高刚度位置环。
+两种模式可以在同一个任务中混合，但每台电机只能选择其中一种模式。
 
 ## 停止和失联处理
 
@@ -222,17 +255,19 @@ tau = 0;
 
 ## 常见错误
 
-1. 同一周期同时调用 `DMMotorControl()` 和 `DMMotorMITControl()`。
-2. 把 IMU 角度直接当作 `position_des`。
-3. 在外部 IMU 力矩闭环中同时打开大 `kp/kd`。
-4. 把 DJI 电机的电流前馈数值直接当作 DM4310 力矩前馈。
-5. 停止时只清力矩但保留 `kp/kd`，导致电机仍然保持位置。
+1. 同一周期重复调用 `DMMotorControl()` 或 `DMMotorMITControl()`。
+2. 忘记为需要 MIT 控制的电机设置 `DMMOTOR_CONTROL_MIT`。
+3. 把 IMU 角度直接当作 `position_des`。
+4. 在外部 IMU 力矩闭环中同时打开大 `kp/kd`。
+5. 把 DJI 电机的电流前馈数值直接当作 DM4310 力矩前馈。
+6. 停止时只清力矩但保留 `kp/kd`，导致电机仍然保持位置。
 
 ## 文件接口摘要
 
 ```c
 DMMotorInstance *DMMotorInit(Motor_Init_Config_s *config);
 void DMMotorSetRef(DMMotorInstance *motor, float ref);
+void DMMotorSetControlMode(DMMotorInstance *motor, DMMotor_Control_Mode_e mode);
 void DMMotorSetMITConfig(DMMotorInstance *motor, const DMMotor_MIT_Config_s *config);
 void DMMotorSetMITRef(DMMotorInstance *motor, float p, float v, float kp, float kd, float tau_ff);
 void DMMotorControl(void);

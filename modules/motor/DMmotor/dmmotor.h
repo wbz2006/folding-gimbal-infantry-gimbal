@@ -3,11 +3,12 @@
  * @brief 达妙 DM4310 电机驱动接口。
  *
  * @details
- * 本驱动提供两种互斥的周期控制入口：
- * - DMMotorControl()：外部 IMU 阻抗控制，驱动内部执行外部多环 PID，只发送 MIT 力矩项。
- * - DMMotorMITControl()：直接发送应用层配置的 MIT 位置、速度、刚度、阻尼和力矩前馈。
+ * 本驱动提供两种可按电机实例分别选择的周期控制模式：
+ * - DMMOTOR_CONTROL_EXTERNAL_IMPEDANCE：外部 IMU 阻抗控制，只发送 MIT 力矩项。
+ * - DMMOTOR_CONTROL_MIT：直接发送 MIT 位置、速度、刚度、阻尼和力矩前馈。
  *
- * @note 同一个控制周期内不要同时调用 DMMotorControl() 和 DMMotorMITControl()。
+ * @note DMMotorControl() 和 DMMotorMITControl() 会依据每个电机的控制模式分发，
+ *       同一个控制周期内各调用一次即可。
  */
 #ifndef DMMOTOR_H
 #define DMMOTOR_H
@@ -42,6 +43,15 @@
 #define DM_KD_MIN (0.0f)
 /** @brief MIT 速度阻尼映射上限。 */
 #define DM_KD_MAX (5.0f)
+
+/**
+ * @brief 达妙电机周期控制模式。
+ */
+typedef enum
+{
+    DMMOTOR_CONTROL_EXTERNAL_IMPEDANCE = 0, /**< 外部 IMU 阻抗控制。 */
+    DMMOTOR_CONTROL_MIT,                    /**< DM 内部 MIT 位置速度环控制。 */
+} DMMotor_Control_Mode_e;
 
 /**
  * @brief 达妙电机反馈测量值。
@@ -106,6 +116,13 @@ typedef struct
 
     DMMotor_MIT_Config_s mit_config;            /**< MIT 控制参数配置。 */
     DMMotor_Send_s motor_send_mailbox;          /**< MIT 报文编码缓存。 */
+    /**
+     * @brief 当前周期控制模式。
+     *
+     * @note 该成员对应用层开放。电机初始化后可以直接赋值，
+     *       也可以调用 DMMotorSetControlMode() 修改。
+     */
+    DMMotor_Control_Mode_e control_mode;
 
     Motor_Working_Type_e stop_flag;             /**< 电机启停状态。 */
     CANInstance *motor_can_instace;             /**< 绑定的 CAN 实例。 */
@@ -184,13 +201,28 @@ void DMMotorChangeFeed(
     Feedback_Source_e type);
 
 /**
+ * @brief 设置达妙电机的周期控制模式。
+ *
+ * @param motor 电机实例。
+ * @param control_mode 周期控制模式。
+ *
+ * @note 新注册的电机默认使用 DMMOTOR_CONTROL_EXTERNAL_IMPEDANCE。
+ *       该接口与直接修改 motor->control_mode 的效果相同；
+ *       模式切换后仍由周期控制任务发送报文，不需要重新注册电机。
+ */
+void DMMotorSetControlMode(
+    DMMotorInstance *motor,
+    DMMotor_Control_Mode_e control_mode);
+
+/**
  * @brief 配置物理量形式的MIT控制参数。
  *
  * @param motor 电机实例。
  * @param config MIT 控制参数配置。
  *
- * @note DMMotorMITControl()会完整使用该配置。
- *       DMMotorControl()只使用torque_des作为力矩前馈，p/v/Kp/Kd会被置零发送。
+ * @note 当电机模式为 DMMOTOR_CONTROL_MIT 时，DMMotorMITControl() 会完整使用该配置。
+ *       当电机模式为 DMMOTOR_CONTROL_EXTERNAL_IMPEDANCE 时，
+ *       DMMotorControl() 只使用 torque_des 作为力矩前馈，p/v/Kp/Kd 会被置零发送。
  */
 void DMMotorSetMITConfig(
     DMMotorInstance *motor,
@@ -215,17 +247,18 @@ void DMMotorSetMITRef(
     float torque_ff);
 
 /**
- * @brief IMU外部阻抗控制。
+ * @brief 执行外部 IMU 阻抗控制。
  *
- * @note 函数内部执行外部角度/速度/力矩串级PID。
- *       最终发送p=0, v=0, Kp=0, Kd=0, torque=PID输出+力矩前馈。
+ * @note 只处理控制模式为 DMMOTOR_CONTROL_EXTERNAL_IMPEDANCE 的电机。
+ *       同一控制周期内可与 DMMotorMITControl() 各调用一次。
  */
 void DMMotorControl(void);
 
 /**
- * @brief IMU外环 + DM内部MIT位置速度环控制。
+ * @brief 执行 DM 内部 MIT 位置速度环控制。
  *
- * @note 直接发送DMMotorSetMITConfig()配置的MIT参数，不计算外部PID。
+ * @note 只处理控制模式为 DMMOTOR_CONTROL_MIT 的电机。
+ *       直接发送 DMMotorSetMITConfig() 配置的 MIT 参数，不计算外部 PID。
  */
 void DMMotorMITControl(void);
 
