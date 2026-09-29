@@ -97,8 +97,8 @@ typedef enum
 typedef enum
 {
     GIMBAL_ZERO_FORCE = 0, // 电流零输入
-    GIMBAL_FREE_MODE,      // 云台自由运动模式,即与底盘分离(底盘此时应为NO_FOLLOW)反馈值为电机total_angle;似乎可以改为全部用IMU数据?
-    GIMBAL_GYRO_MODE,      // 云台陀螺仪反馈模式,反馈值为陀螺仪pitch,total_yaw_angle,底盘可以为小陀螺和跟随模式
+    GIMBAL_FREE_MODE,      // 云台与底盘分离
+    GIMBAL_GYRO_MODE,      // 云台陀螺仪反馈模式
 } gimbal_mode_e;
 
 // 云台折叠状态机

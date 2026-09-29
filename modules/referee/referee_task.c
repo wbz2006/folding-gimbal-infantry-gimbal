@@ -194,6 +194,9 @@ static void MyUIRefresh(referee_info_t *referee_recv_info, Referee_Interactive_i
         case CHASSIS_FOLLOW_GIMBAL_YAW:
             UICharDraw(&UI_State_dyn[0], "sd0", UI_Graph_Change, 8, UI_Color_Main, 15, 2, 270, 750, "follow   ");
             break;
+        case CHASSIS_FOLDED_ROTATE:
+            UICharDraw(&UI_State_dyn[0], "sd0", UI_Graph_Change, 8, UI_Color_Main, 15, 2, 270, 750, "folded   ");
+            break;
         }
         UICharRefresh(&referee_recv_info->referee_id, UI_State_dyn[0]);
         _Interactive_data->Referee_Interactive_Flag.chassis_flag = 0;

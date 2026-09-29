@@ -7,6 +7,7 @@
 #include "master_process.h"
 #include "message_center.h"
 #include "general_def.h"
+#include "user_lib.h"
 #include "dji_motor.h"
 #include "bmi088.h"
 // bsp
@@ -46,6 +47,9 @@ static Shoot_Upload_Data_s shoot_fetch_data; // 从发射获取的反馈信息
 
 static Robot_Status_e robot_state; // 机器人整体工作状态
 
+static chassis_mode_e normal_chassis_mode;
+static gimbal_request_mode_e normal_gimbal_request;
+
 BMI088Instance *bmi088_test; // 云台IMU
 BMI088_Data_t bmi088_data;
 void RobotCMDInit()
@@ -75,6 +79,13 @@ void RobotCMDInit()
     cmd_can_comm = CANCommInit(&comm_conf);
 #endif // GIMBAL_BOARD
     gimbal_cmd_send.pitch = 0;
+    gimbal_cmd_send.yaw = 0;
+    gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
+    gimbal_cmd_send.request_mode = GIMBAL_REQUEST_FOLD;
+    chassis_cmd_send.chassis_mode = CHASSIS_NO_FOLLOW;
+    chassis_cmd_send.wz = 0;
+    normal_chassis_mode = CHASSIS_FOLDED_ROTATE;
+    normal_gimbal_request = GIMBAL_REQUEST_FOLD;
 
     robot_state = ROBOT_READY; // 启动时机器人进入工作模式,后续加入所有应用初始化完成之后再进入
 }
@@ -99,29 +110,41 @@ static void CalcOffsetAngle()
  */
 static void RemoteControlSet()
 {
-    if (switch_is_down(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[下],小陀螺
+    const uint8_t left_switch = rc_data[TEMP].rc.switch_left;
+    const uint8_t right_switch = rc_data[TEMP].rc.switch_right;
+
+    if (switch_is_mid(left_switch))
     {
-        chassis_cmd_send.chassis_mode = CHASSIS_ROTATE;
-        gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
+        /* Left switch middle: force folded mode; right switch is ignored. */
+        normal_chassis_mode = CHASSIS_FOLDED_ROTATE;
+        normal_gimbal_request = GIMBAL_REQUEST_FOLD;
     }
-    else if (switch_is_mid(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[中],随动
+    else
     {
-        chassis_cmd_send.chassis_mode = CHASSIS_FOLLOW_GIMBAL_YAW;
-        gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
-    }
-    else if (switch_is_up(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[上],初始状态
-    {
-        chassis_cmd_send.chassis_mode = CHASSIS_NO_FOLLOW;  //CHASSIS_ZERO_FORCE;
-        gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;     //GIMBAL_ZERO_FORCE;
+        /* Left switch down: deploy and use the three right-switch modes. */
+        if (switch_is_down(right_switch))
+        {
+            normal_chassis_mode = CHASSIS_ROTATE;
+            normal_gimbal_request = GIMBAL_REQUEST_GYRO;
+        }
+        else if (switch_is_mid(right_switch))
+        {
+            normal_chassis_mode = CHASSIS_FOLLOW_GIMBAL_YAW;
+            normal_gimbal_request = GIMBAL_REQUEST_FOLLOW;
+        }
+        else
+        {
+            normal_chassis_mode = CHASSIS_NO_FOLLOW;
+            normal_gimbal_request = GIMBAL_REQUEST_FREE;
+        }
     }
 
+    chassis_cmd_send.chassis_mode = normal_chassis_mode;
+    gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
+    gimbal_cmd_send.request_mode = normal_gimbal_request;
+
     // 云台参数,确定云台控制数据
-    if (switch_is_mid(rc_data[TEMP].rc.switch_left)) // 左侧开关状态为[中],视觉模式
-    {
-       // 切换为折叠态
-    }
-    // 左侧开关状态为[下],或视觉未识别到目标,纯遥控器拨杆控制
-    if (switch_is_down(rc_data[TEMP].rc.switch_left) || vision_recv_data->target_state == NO_TARGET)
+    if (switch_is_down(left_switch))
     { // 按照摇杆的输出大小进行角度增量,增益系数需调整
         gimbal_cmd_send.yaw += 0.005f * (float)rc_data[TEMP].rc.rocker_l_;
         gimbal_cmd_send.pitch += 0.001f * (float)rc_data[TEMP].rc.rocker_l1;
@@ -158,6 +181,11 @@ static void RemoteControlSet()
  */
 static void MouseKeySet()
 {
+    normal_chassis_mode = CHASSIS_NO_FOLLOW;
+    normal_gimbal_request = GIMBAL_REQUEST_FREE;
+    gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
+    gimbal_cmd_send.request_mode = GIMBAL_REQUEST_FREE;
+    chassis_cmd_send.chassis_mode = normal_chassis_mode;
     chassis_cmd_send.vx = rc_data[TEMP].key[KEY_PRESS].w * 300 - rc_data[TEMP].key[KEY_PRESS].s * 300; // 系数待测
     chassis_cmd_send.vy = rc_data[TEMP].key[KEY_PRESS].s * 300 - rc_data[TEMP].key[KEY_PRESS].d * 300;
 
@@ -236,6 +264,29 @@ static void MouseKeySet()
     }
 }
 
+static void ApplyFoldChassisMode(void)
+{
+    switch (gimbal_fetch_data.fold_state)
+    {
+    case GIMBAL_FOLDED:
+        chassis_cmd_send.chassis_mode = CHASSIS_FOLDED_ROTATE;
+        /* In folded mode the yaw stick is the only source of chassis wz. */
+        chassis_cmd_send.wz = 8.0f * (float)rc_data[TEMP].rc.rocker_l_;
+        chassis_cmd_send.wz = float_constrain(chassis_cmd_send.wz,
+                                               -4500.0f, 4500.0f);
+        break;
+    case GIMBAL_FOLDING:
+    case GIMBAL_UNFOLDING:
+        chassis_cmd_send.chassis_mode = CHASSIS_NO_FOLLOW;
+        chassis_cmd_send.wz = 0.0f;
+        break;
+    case GIMBAL_DEPLOYED:
+    default:
+        chassis_cmd_send.chassis_mode = normal_chassis_mode;
+        break;
+    }
+}
+
 /**
  * @brief  紧急停止,包括遥控器左上侧拨轮打满/重要模块离线/双板通信失效等
  *         停止的阈值'300'待修改成合适的值,或改为开关控制.
@@ -282,10 +333,13 @@ void RobotCMDTask()
     // 根据gimbal的反馈值计算云台和底盘正方向的夹角,不需要传参,通过static私有变量完成
     CalcOffsetAngle();
     // 根据遥控器左侧开关,确定当前使用的控制模式为遥控器调试还是键鼠
-    if (switch_is_down(rc_data[TEMP].rc.switch_left)) // 遥控器左侧开关状态为[下],遥控器控制
+    if (switch_is_down(rc_data[TEMP].rc.switch_left) ||
+        switch_is_mid(rc_data[TEMP].rc.switch_left)) // 左侧下/中档为遥控器控制
         RemoteControlSet();
     else if (switch_is_up(rc_data[TEMP].rc.switch_left)) // 遥控器左侧开关状态为[上],键盘控制
         MouseKeySet();
+
+    ApplyFoldChassisMode();
 
     EmergencyHandler(); // 处理模块离线和遥控器急停等紧急情况
 
