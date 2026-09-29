@@ -9,8 +9,9 @@
 1. `DMMOTOR_CONTROL_EXTERNAL_IMPEDANCE`：IMU 外部阻抗控制。
 2. `DMMOTOR_CONTROL_MIT`：IMU 外环或轨迹规划 + DM 内部 MIT 位置速度环控制。
 
-`DMMotorControl()` 只处理外部阻抗模式的电机，`DMMotorMITControl()` 只处理 MIT 模式的电机。
-因此混合使用时，两个函数在同一个控制周期内各调用一次即可；同一台电机不会被两个入口重复发送。
+`DMMotorControl()` 会遍历全部 DM 电机，并根据每个实例的 `control_mode` 自动选择控制方式。
+因此混合使用时，任务层只需要调用 `DMMotorControl()` 一次。
+`DMMotorMITControl()` 仅为兼容旧代码保留，不应与统一入口同时调用。
 
 控制模式保存在公开的 `DMMotorInstance::control_mode` 成员中，有两种配置方式：
 
@@ -187,9 +188,8 @@ DMMotorSetMITConfig(lower_pitch_motor, &mit_config);
 ```c
 void MotorControlTask(void)
 {
-    /* 外部阻抗电机和 MIT 电机分别过滤处理。 */
+    /* 根据每个 DM 电机实例的 control_mode 统一分发。 */
     DMMotorControl();
-    DMMotorMITControl();
 }
 ```
 
@@ -208,10 +208,10 @@ void MotorControlTask(void)
 |---|---|
 | 云台稳定、抗扰动 | `DMMotorControl()` |
 | IMU 角度/角速度闭环 | `DMMotorControl()` |
-| 明确的电机轴位置伺服 | `DMMotorMITControl()` |
-| 机械臂式刚性保持 | `DMMotorMITControl()` |
+| 明确的电机轴位置伺服 | `DMMotorControl()` + `DMMOTOR_CONTROL_MIT` |
+| 机械臂式刚性保持 | `DMMotorControl()` + `DMMOTOR_CONTROL_MIT` |
 | 想先快速调通云台 | 先用 `DMMotorControl()` |
-| 想利用 DM 内部刚度 | 再评估 `DMMotorMITControl()` |
+| 想利用 DM 内部刚度 | 设置 `DMMOTOR_CONTROL_MIT` 后调用 `DMMotorControl()` |
 
 不要在同一台电机上同时配置外部高增益 IMU 位置环和 MIT 内部高刚度位置环。
 两种模式可以在同一个任务中混合，但每台电机只能选择其中一种模式。
@@ -255,7 +255,7 @@ tau = 0;
 
 ## 常见错误
 
-1. 同一周期重复调用 `DMMotorControl()` 或 `DMMotorMITControl()`。
+1. 同一周期重复调用 `DMMotorControl()`。
 2. 忘记为需要 MIT 控制的电机设置 `DMMOTOR_CONTROL_MIT`。
 3. 把 IMU 角度直接当作 `position_des`。
 4. 在外部 IMU 力矩闭环中同时打开大 `kp/kd`。
@@ -271,6 +271,7 @@ void DMMotorSetControlMode(DMMotorInstance *motor, DMMotor_Control_Mode_e mode);
 void DMMotorSetMITConfig(DMMotorInstance *motor, const DMMotor_MIT_Config_s *config);
 void DMMotorSetMITRef(DMMotorInstance *motor, float p, float v, float kp, float kd, float tau_ff);
 void DMMotorControl(void);
+/* 兼容旧代码，统一入口下不需要调用。 */
 void DMMotorMITControl(void);
 void DMMotorStop(DMMotorInstance *motor);
 void DMMotorEnable(DMMotorInstance *motor);

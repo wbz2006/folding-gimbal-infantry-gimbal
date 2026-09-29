@@ -525,36 +525,72 @@ void DMMotorSetMITRef(
 }
 
 /**
- * @brief IMU 外部阻抗控制入口。
+ * @brief 根据单个电机的控制模式发送控制报文。
+ *
+ * @param motor 电机实例。
  *
  * @details
- * 该函数执行外部角度/速度/力矩多环 PID，并强制以
- * p=0, v=0, Kp=0, Kd=0, torque=PID输出+力矩前馈 的形式发送 MIT 报文。
+ * - 外部阻抗模式：执行外部角度/速度/力矩多环 PID，只发送力矩项；
+ * - MIT 模式：直接发送实例中的 position/velocity/kp/kd/torque 配置。
+ */
+static void DMMotorControlOne(DMMotorInstance *motor)
+{
+    switch (motor->control_mode)
+    {
+        case DMMOTOR_CONTROL_EXTERNAL_IMPEDANCE:
+        {
+            const float pid_output = DMMotorCalculateExternalOutput(motor);
+            const float torque_des = pid_output + motor->mit_config.torque_des;
+
+            DMMotorSendMIT(
+                motor,
+                0.0f,
+                0.0f,
+                0.0f,
+                0.0f,
+                torque_des);
+            break;
+        }
+
+        case DMMOTOR_CONTROL_MIT:
+            DMMotorSendMIT(
+                motor,
+                motor->mit_config.position_des,
+                motor->mit_config.velocity_des,
+                motor->mit_config.kp,
+                motor->mit_config.kd,
+                motor->mit_config.torque_des);
+            break;
+
+        default:
+            /* 直接修改 control_mode 时遇到非法值，发送零报文保持安全。 */
+            DMMotorSendMIT(motor, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+            break;
+    }
+}
+
+/**
+ * @brief 统一的达妙电机周期控制入口。
+ *
+ * @details
+ * 遍历所有已注册的达妙电机，根据每个实例的 control_mode 分别执行：
+ * - 外部 IMU 阻抗控制；
+ * - DM 内部 MIT 位置速度环控制。
+ *
+ * 每台电机在一个周期内只发送一帧控制报文。
  */
 void DMMotorControl(void)
 {
     for (size_t i = 0; i < idx; ++i)
     {
-        DMMotorInstance *motor = dm_motor_instance[i];
-
-        if (motor->control_mode != DMMOTOR_CONTROL_EXTERNAL_IMPEDANCE)
-        {
-            continue;
-        }
-
-        const float pid_output = DMMotorCalculateExternalOutput(motor);
-        const float torque_des = pid_output + motor->mit_config.torque_des;
-
-        DMMotorSendMIT(motor, 0.0f, 0.0f, 0.0f, 0.0f, torque_des);
+        DMMotorControlOne(dm_motor_instance[i]);
     }
 }
 
 /**
- * @brief MIT 内部位置速度环控制入口。
+ * @brief 兼容接口：仅发送 MIT 模式电机的控制报文。
  *
- * @details
- * 该函数直接发送 DMMotorSetMITConfig() 配置的 p/v/Kp/Kd/tau_ff，
- * 不计算外部 PID，适合应用层已完成 IMU 外环或轨迹规划的场景。
+ * @note 使用统一的 DMMotorControl() 时，不应再调用该函数。
  */
 void DMMotorMITControl(void)
 {
@@ -567,12 +603,6 @@ void DMMotorMITControl(void)
             continue;
         }
 
-        DMMotorSendMIT(
-            motor,
-            motor->mit_config.position_des,
-            motor->mit_config.velocity_des,
-            motor->mit_config.kp,
-            motor->mit_config.kd,
-            motor->mit_config.torque_des);
+        DMMotorControlOne(motor);
     }
 }

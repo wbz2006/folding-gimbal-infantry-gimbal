@@ -7,8 +7,8 @@
  * - DMMOTOR_CONTROL_EXTERNAL_IMPEDANCE：外部 IMU 阻抗控制，只发送 MIT 力矩项。
  * - DMMOTOR_CONTROL_MIT：直接发送 MIT 位置、速度、刚度、阻尼和力矩前馈。
  *
- * @note DMMotorControl() 和 DMMotorMITControl() 会依据每个电机的控制模式分发，
- *       同一个控制周期内各调用一次即可。
+ * @note DMMotorControl() 会依据每个电机的控制模式统一分发。
+ *       DMMotorMITControl() 仅作为兼容旧调用方式保留，通常不需要调用。
  */
 #ifndef DMMOTOR_H
 #define DMMOTOR_H
@@ -220,7 +220,7 @@ void DMMotorSetControlMode(
  * @param motor 电机实例。
  * @param config MIT 控制参数配置。
  *
- * @note 当电机模式为 DMMOTOR_CONTROL_MIT 时，DMMotorMITControl() 会完整使用该配置。
+ * @note 当电机模式为 DMMOTOR_CONTROL_MIT 时，DMMotorControl() 会完整使用该配置。
  *       当电机模式为 DMMOTOR_CONTROL_EXTERNAL_IMPEDANCE 时，
  *       DMMotorControl() 只使用 torque_des 作为力矩前馈，p/v/Kp/Kd 会被置零发送。
  */
@@ -249,16 +249,16 @@ void DMMotorSetMITRef(
 /**
  * @brief 执行外部 IMU 阻抗控制。
  *
- * @note 只处理控制模式为 DMMOTOR_CONTROL_EXTERNAL_IMPEDANCE 的电机。
- *       同一控制周期内可与 DMMotorMITControl() 各调用一次。
+ * @note 根据每个电机的 control_mode 自动选择外部阻抗控制或 MIT 控制。
+ *       正常情况下，电机任务只需要调用该函数一次。
  */
 void DMMotorControl(void);
 
 /**
- * @brief 执行 DM 内部 MIT 位置速度环控制。
+ * @brief 兼容接口：仅执行 MIT 模式电机控制。
  *
- * @note 只处理控制模式为 DMMOTOR_CONTROL_MIT 的电机。
- *       直接发送 DMMotorSetMITConfig() 配置的 MIT 参数，不计算外部 PID。
+ * @note 旧代码可以使用该接口单独发送 MIT 模式电机。
+ *       使用统一的 DMMotorControl() 时不要再调用该接口，否则 MIT 电机会重复发送。
  */
 void DMMotorMITControl(void);
 
