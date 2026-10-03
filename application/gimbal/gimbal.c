@@ -54,7 +54,7 @@ void GimbalInit()
             .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
         },
         .motor_type = DM4340};
-    // PITCH
+    // GIMBAL_PITCH
     Motor_Init_Config_s upper_pitch_config = {
         .can_init_config = {
             .can_handle = &hcan3,
@@ -88,9 +88,9 @@ void GimbalInit()
             .close_loop_type = SPEED_LOOP | ANGLE_LOOP,
             .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
         },
-        .motor_type = GM6020,
+        .motor_type = DM4310,
     };
-        // PITCH
+    // FOLDING_PITCH
     Motor_Init_Config_s lower_pitch_config = {
         .can_init_config = {
             .can_handle = &hcan3,
@@ -146,15 +146,15 @@ void GimbalTask()
     {
     // 停止
     case GIMBAL_ZERO_FORCE:
-        DJIMotorStop(yaw_motor);
-        DJIMotorStop(upper_pitch_motor);
+        DMMotorStop(yaw_motor);
+        DMMotorStop(upper_pitch_motor);
         break;
     // 使用陀螺仪的反馈,底盘根据yaw电机的offset跟随云台或视觉模式采用
     case GIMBAL_GYRO_MODE: // 后续只保留此模式
-        DJIMotorEnable(yaw_motor);
-        DJIMotorEnable(upper_pitch_motor);
-        DJIMotorSetRef(yaw_motor, gimbal_cmd_recv.yaw); // yaw和pitch会在robot_cmd中处理好多圈和单圈
-        DJIMotorSetRef(upper_pitch_motor, gimbal_cmd_recv.pitch);
+        DMMotorEnable(yaw_motor);
+        DMMotorEnable(upper_pitch_motor);
+        DMMotorSetRef(yaw_motor, gimbal_cmd_recv.yaw); // yaw和pitch会在robot_cmd中处理好多圈和单圈
+        DMMotorSetRef(upper_pitch_motor, gimbal_cmd_recv.pitch);
         break;
     default:
         break;

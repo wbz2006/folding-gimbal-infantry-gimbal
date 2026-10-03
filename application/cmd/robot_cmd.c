@@ -12,6 +12,7 @@
 // bsp
 #include "bsp_dwt.h"
 #include "bsp_log.h"
+#include "user_lib.h"
 
 // 私有宏,自动将编码器转换成角度值
 #define YAW_ALIGN_ANGLE (YAW_CHASSIS_ALIGN_ECD * ECD_ANGLE_COEF_DJI) // 对齐时的角度,0-360

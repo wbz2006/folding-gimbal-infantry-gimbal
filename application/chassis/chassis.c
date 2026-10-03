@@ -22,6 +22,7 @@
 #include "bsp_dwt.h"
 #include "referee_UI.h"
 #include "arm_math.h"
+#include "user_lib.h"
 
 /* 根据robot_def.h中的macro自动计算的参数 */
 #define HALF_WHEEL_BASE (WHEEL_BASE / 2.0f)     // 半轴距
@@ -258,7 +259,7 @@ void ChassisTask()
     chassis_vy = chassis_cmd_recv.vx * sin_theta + chassis_cmd_recv.vy * cos_theta;
 
     // 根据控制模式进行正运动学解算,计算底盘输出
-    MecanumCalculate();
+    OmniCalculate();
 
     // 根据裁判系统的反馈数据和电容数据对输出限幅并设定闭环参考值
     LimitChassisOutput();
