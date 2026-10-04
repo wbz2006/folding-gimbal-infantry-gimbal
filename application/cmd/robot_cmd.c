@@ -16,7 +16,7 @@
 
 // 私有宏,自动将编码器转换成角度值
 #define YAW_ALIGN_ANGLE (YAW_CHASSIS_ALIGN_ECD * ECD_ANGLE_COEF_DJI) // 对齐时的角度,0-360
-#define PTICH_HORIZON_ANGLE (PITCH_HORIZON_ECD * ECD_ANGLE_COEF_DJI) // pitch水平时电机的角度,0-360
+#define PITCH_HORIZON_ANGLE (PITCH_HORIZON_ECD * ECD_ANGLE_COEF_DJI) // pitch水平时电机的角度,0-360
 
 /* cmd应用包含的模块实例指针和交互信息存储*/
 #ifdef GIMBAL_BOARD // 对双板的兼容,条件编译
@@ -103,17 +103,17 @@ static void RemoteControlSet()
     if (switch_is_down(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[下],小陀螺
     {
         chassis_cmd_send.chassis_mode = CHASSIS_ROTATE;
-        gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
+        gimbal_cmd_send.gimbal_mode = GIMBAL_IMU_MODE;
     }
     else if (switch_is_mid(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[中],随动
     {
         chassis_cmd_send.chassis_mode = CHASSIS_FOLLOW_GIMBAL_YAW;
-        gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
+        gimbal_cmd_send.gimbal_mode = GIMBAL_IMU_MODE;
     }
     else if (switch_is_up(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[上],初始状态
     {
         chassis_cmd_send.chassis_mode = CHASSIS_NO_FOLLOW;  //CHASSIS_ZERO_FORCE;
-        gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;     //GIMBAL_ZERO_FORCE;
+        gimbal_cmd_send.gimbal_mode = GIMBAL_IMU_MODE;     //GIMBAL_ZERO_FORCE;
     }
 
     // 云台参数,确定云台控制数据

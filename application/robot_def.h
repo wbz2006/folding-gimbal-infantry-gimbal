@@ -97,8 +97,7 @@ typedef enum
 typedef enum
 {
     GIMBAL_ZERO_FORCE = 0, // 电流零输入
-    GIMBAL_FREE_MODE,      // 云台自由运动模式,即与底盘分离(底盘此时应为NO_FOLLOW)反馈值为电机total_angle;似乎可以改为全部用IMU数据?
-    GIMBAL_GYRO_MODE,      // 云台陀螺仪反馈模式,反馈值为陀螺仪pitch,total_yaw_angle,底盘可以为小陀螺和跟随模式
+    GIMBAL_IMU_MODE,      // 云台陀螺仪反馈模式,反馈值为陀螺仪pitch,total_yaw_angle,底盘可以为小陀螺和跟随模式
 } gimbal_mode_e;
 
 // 云台折叠状态机
@@ -113,10 +112,8 @@ typedef enum
 // 云台折叠请求状态机
 typedef enum
 {
-    GIMBAL_REQUEST_FOLD = 0,
-    GIMBAL_REQUEST_GYRO,
-    GIMBAL_REQUEST_FREE,
-    GIMBAL_REQUEST_FOLLOW,
+    GIMBAL_REQUEST_FOLD = 0, // 请求折叠
+    GIMBAL_REQUEST_DEPLOY,   // 请求展开
 } gimbal_request_mode_e;
 
 // 云台折叠步骤状态机
@@ -128,6 +125,13 @@ typedef enum
     FOLD_STEP_FINISH,
 } fold_step_e;
 
+typedef enum
+{
+    LOWER_PITCH_FOLD,
+    LOWER_PITCH_DEPLOY,
+    YAW_FOLD,
+    UPPER_PITCH_FOLD,
+} gimbal_reach_target_type_e;
 
 // 发射模式设置
 typedef enum
