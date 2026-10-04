@@ -3,7 +3,6 @@
 #include "dmmotor.h"
 #include "ins_task.h"
 #include "message_center.h"
-#include "general_def.h"
 #include "bmi088.h"
 #include <math.h>
 #include <stdbool.h>
@@ -68,7 +67,6 @@ static bool GimbalTargetReached(const gimbal_reach_target_type_e target_type)
 
 /**
  * @brief 以 MIT 模式设置下 pitch 电机的目标位置，并使能电机。
- *        MIT（Motor Initialization Technology）模式是达妙电机的直接位置-速度-力矩控制模式，
  *        不经过标准 PID 模块，直接下发位置/速度/Kp/Kd/前馈力矩，响应更快，适合折叠机构的定点控制。
  * @param position 目标位置（弧度）
  * @note  速度目标固定为 0，前馈力矩固定为 0，仅用位置环 + 阻尼控制。
@@ -110,20 +108,26 @@ static void EnterUnfolding(void)
  */
 static void UpdateFoldState(void)
 {
-    const bool fold_requested =
-        gimbal_cmd_recv.request_mode == GIMBAL_REQUEST_FOLD;
+    switch (gimbal_cmd_recv.request_mode)
+    {
+        case GIMBAL_REQUEST_FOLD:
+            if (fold_state == GIMBAL_DEPLOYED ||
+                fold_state == GIMBAL_UNFOLDING)
+            {
+                EnterFolding();
+            }
+            break;
 
-    if (fold_requested &&
-        (fold_state == GIMBAL_DEPLOYED || fold_state == GIMBAL_UNFOLDING))
-    {
-        // 从展开态/展开中请求折叠 → 进入折叠流程
-        EnterFolding();
-    }
-    else if (!fold_requested &&
-             (fold_state == GIMBAL_FOLDED || fold_state == GIMBAL_FOLDING))
-    {
-        // 从折叠态/折叠中请求展开 → 进入展开流程
-        EnterUnfolding();
+        case GIMBAL_REQUEST_DEPLOY:
+            if (fold_state == GIMBAL_FOLDED ||
+                fold_state == GIMBAL_FOLDING)
+            {
+                EnterUnfolding();
+            }
+            break;
+
+        default:
+            break;
     }
 }
 
@@ -157,10 +161,9 @@ static void RunFolding(void)
     /* ---------- 步骤1：调平上 pitch ---------- */
     case FOLD_STEP_LEVEL_UPPER_PITCH:
         // 上 pitch 转到水平目标（0°），下 pitch 保持当前位置不动
-        DMMotorSetRef(upper_pitch_motor,
-                      GIMBAL_FOLD_UPPER_PITCH_TARGET_DEG);
+        DMMotorSetRef(upper_pitch_motor, GIMBAL_FOLD_UPPER_PITCH_TARGET_DEG);
         SetLowerPitchMIT(lower_pitch_motor->measure.position);
-        if (PitchReached(GIMBAL_FOLD_UPPER_PITCH_TARGET_DEG))
+        if (GimbalTargetReached(UPPER_PITCH_FOLD))
         {
             // 上 pitch 已水平，进入下一步：回正 yaw
             fold_step = FOLD_STEP_CENTER_YAW;
@@ -170,13 +173,11 @@ static void RunFolding(void)
     /* ---------- 步骤2：回正 yaw ---------- */
     case FOLD_STEP_CENTER_YAW:
         // 上 pitch 继续保持水平；yaw 使能并转到 0°；下 pitch 保持当前位置
-        DMMotorSetRef(upper_pitch_motor,
-                      GIMBAL_FOLD_UPPER_PITCH_TARGET_DEG);
+        DMMotorSetRef(upper_pitch_motor, GIMBAL_FOLD_UPPER_PITCH_TARGET_DEG);
         DMMotorEnable(yaw_motor);
         DMMotorSetRef(yaw_motor, GIMBAL_FOLD_YAW_TARGET_DEG);
         SetLowerPitchMIT(lower_pitch_motor->measure.position);
-        if (PositionReached(yaw_motor->measure.position,
-                            0.0f))
+        if (GimbalTargetReached(YAW_FOLD))
         {
             // yaw 已回正，进入下一步：收下 pitch
             fold_step = FOLD_STEP_MOVE_LOWER_PITCH;
@@ -187,11 +188,9 @@ static void RunFolding(void)
     case FOLD_STEP_MOVE_LOWER_PITCH:
         // yaw 停止（已回正无需保持）；上 pitch 保持水平；下 pitch 转到收纳位 -1.0 rad
         DMMotorStop(yaw_motor);
-        DMMotorSetRef(upper_pitch_motor,
-                      GIMBAL_FOLD_UPPER_PITCH_TARGET_DEG);
+        DMMotorSetRef(upper_pitch_motor, GIMBAL_FOLD_UPPER_PITCH_TARGET_DEG);
         SetLowerPitchMIT(GIMBAL_FOLD_LOWER_PITCH_TARGET_RAD);
-        if (PositionReached(lower_pitch_motor->measure.position,
-                            GIMBAL_FOLD_LOWER_PITCH_TARGET_RAD))
+        if (GimbalTargetReached(LOWER_PITCH_FOLD))
         {
             // 下 pitch 已到收纳位，进入完成步骤
             fold_step = FOLD_STEP_FINISH;
@@ -203,8 +202,7 @@ static void RunFolding(void)
     default:
         // 保持最终折叠姿态：yaw 停止，上 pitch 水平，下 pitch 收纳位
         DMMotorStop(yaw_motor);
-        DMMotorSetRef(upper_pitch_motor,
-                      GIMBAL_FOLD_UPPER_PITCH_TARGET_DEG);
+        DMMotorSetRef(upper_pitch_motor,GIMBAL_FOLD_UPPER_PITCH_TARGET_DEG);
         SetLowerPitchMIT(GIMBAL_FOLD_LOWER_PITCH_TARGET_RAD);
         // 切换到已折叠状态（后续 GimbalTask 会走 GIMBAL_FOLDED 分支保持姿态）
         fold_state = GIMBAL_FOLDED;
@@ -228,12 +226,10 @@ static void RunUnfolding(void)
     // yaw 停止，上 pitch 使能并保持水平，下 pitch 升到工作位
     DMMotorStop(yaw_motor);
     DMMotorEnable(upper_pitch_motor);
-    DMMotorSetRef(upper_pitch_motor,
-                  GIMBAL_FOLD_UPPER_PITCH_TARGET_DEG);
+    DMMotorSetRef(upper_pitch_motor, GIMBAL_FOLD_UPPER_PITCH_TARGET_DEG);
     SetLowerPitchMIT(GIMBAL_DEPLOY_LOWER_PITCH_TARGET_RAD);
 
-    if (PositionReached(lower_pitch_motor->measure.position,
-                        GIMBAL_DEPLOY_LOWER_PITCH_TARGET_RAD))
+    if (GimbalTargetReached(LOWER_PITCH_FOLD))
     {
         // 下 pitch 已到工作位，展开完成，进入正常工作模式
         fold_state = GIMBAL_DEPLOYED;
@@ -357,42 +353,64 @@ void GimbalInit()
 
     gimbal_pub = PubRegister("gimbal_feed", sizeof(Gimbal_Upload_Data_s));
     gimbal_sub = SubRegister("gimbal_cmd", sizeof(Gimbal_Ctrl_Cmd_s));
+
+    gimbal_cmd_recv.request_mode = GIMBAL_REQUEST_FOLD;
+    gimbal_feedback_data.fold_state = GIMBAL_FOLDING;
 }
 
-/* 机器人云台控制核心任务,后续考虑只保留IMU控制,不再需要电机的反馈 */
+
 void GimbalTask()
 {
-    // 获取云台控制数据
-    // 后续增加未收到数据的处理
+
     SubGetMessage(gimbal_sub, &gimbal_cmd_recv);
 
-    // 根据控制模式进行电机反馈切换和过渡,视觉模式在robot_cmd模块就已经设置好,gimbal只看yaw_ref和pitch_ref
-    switch (gimbal_cmd_recv.gimbal_mode)
+    // ---------- 根据折叠请求更新状态机 ----------
+    UpdateFoldState();
+
+
+    if (gimbal_cmd_recv.gimbal_mode == GIMBAL_ZERO_FORCE)
     {
-    // 停止
-    case GIMBAL_ZERO_FORCE:
+        // 急停：所有电机停止输出，力矩为零
         DMMotorStop(yaw_motor);
         DMMotorStop(upper_pitch_motor);
-        break;
-    // 使用陀螺仪的反馈,底盘根据yaw电机的offset跟随云台或视觉模式采用
-    case GIMBAL_IMU_MODE: // 后续只保留此模式
-        DMMotorEnable(yaw_motor);
-        DMMotorEnable(upper_pitch_motor);
-        DMMotorSetRef(yaw_motor, gimbal_cmd_recv.yaw); // yaw和pitch会在robot_cmd中处理好多圈和单圈
-        DMMotorSetRef(upper_pitch_motor, gimbal_cmd_recv.pitch);
-        break;
-    default:
-        break;
+        DMMotorStop(lower_pitch_motor);
+    }
+    else
+    {
+        switch (fold_state)
+        {
+            case GIMBAL_FOLDING:
+                // 折叠进行中：执行 4 步折叠状态机
+                RunFolding();
+                break;
+            case GIMBAL_UNFOLDING:
+                // 展开进行中：下 pitch 升工作位
+                RunUnfolding();
+                break;
+            case GIMBAL_FOLDED:
+                // 已折叠：保持折叠姿态（yaw 停止，上 pitch 水平，下 pitch 收纳位）
+                DMMotorStop(yaw_motor);
+                DMMotorEnable(upper_pitch_motor);
+                DMMotorSetRef(upper_pitch_motor, GIMBAL_FOLD_UPPER_PITCH_TARGET_DEG);
+                SetLowerPitchMIT(GIMBAL_FOLD_LOWER_PITCH_TARGET_RAD);
+                break;
+            case GIMBAL_DEPLOYED:
+            default:
+                // 已展开：正常工作模式，yaw/upper_pitch 跟踪外部目标角度，下 pitch 保持工作位
+                DMMotorEnable(yaw_motor);
+                DMMotorEnable(upper_pitch_motor);
+                DMMotorSetRef(yaw_motor, gimbal_cmd_recv.yaw);           // yaw 目标角度来自 CMD 应用
+                DMMotorSetRef(upper_pitch_motor, gimbal_cmd_recv.pitch); // 上 pitch 目标角度来自 CMD 应用
+                SetLowerPitchMIT(GIMBAL_DEPLOY_LOWER_PITCH_TARGET_RAD);  // 下 pitch 保持工作位
+                break;
+        }
     }
 
-    // 在合适的地方添加pitch重力补偿前馈力矩
-    // 根据IMU姿态/pitch电机角度反馈计算出当前配重下的重力矩
-    // ...
-
-    // 设置反馈数据,主要是imu和yaw的ecd
+    // ---------- 4. 填充并上报反馈数据 ----------
     gimbal_feedback_data.gimbal_imu_data = *gimbal_IMU_data;
-    gimbal_feedback_data.yaw_motor_single_round_angle = yaw_motor->measure.angle_single_round;
+    gimbal_feedback_data.yaw_motor_single_round_angle = (uint16_t)yaw_motor->measure.angle_single_round;
+    gimbal_feedback_data.fold_state = fold_state;           // 当前折叠状态（供 CMD 应用做底盘联动）
 
-    // 推送消息
-    PubPushMessage(gimbal_pub, (void *)&gimbal_feedback_data);
+    PubPushMessage(gimbal_pub, &gimbal_feedback_data);
+
 }

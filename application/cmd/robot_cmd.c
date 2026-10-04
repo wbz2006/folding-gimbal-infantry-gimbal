@@ -47,6 +47,9 @@ static Shoot_Upload_Data_s shoot_fetch_data; // 从发射获取的反馈信息
 
 static Robot_Status_e robot_state; // 机器人整体工作状态
 
+static chassis_mode_e normal_chassis_mode;       // 用户选择的正常底盘模式
+static gimbal_request_mode_e gimbal_request_mode;
+
 BMI088Instance *bmi088_test; // 云台IMU
 BMI088_Data_t bmi088_data;
 void RobotCMDInit()
@@ -76,7 +79,14 @@ void RobotCMDInit()
     cmd_can_comm = CANCommInit(&comm_conf);
 #endif // GIMBAL_BOARD
     gimbal_cmd_send.pitch = 0;
+    gimbal_cmd_send.yaw = 0;
+    gimbal_cmd_send.gimbal_mode = GIMBAL_IMU_MODE;  // 陀螺仪环模式（角度环用IMU反馈）
+    gimbal_cmd_send.request_mode = GIMBAL_REQUEST_FOLD; // 启动默认请求折叠
+    chassis_cmd_send.chassis_mode = CHASSIS_NO_FOLLOW;
+    chassis_cmd_send.wz = 0;
 
+    normal_chassis_mode = CHASSIS_FOLDED_ROTATE;
+    gimbal_request_mode = GIMBAL_REQUEST_FOLD;
     robot_state = ROBOT_READY; // 启动时机器人进入工作模式,后续加入所有应用初始化完成之后再进入
 }
 
@@ -95,50 +105,60 @@ static void CalcOffsetAngle()
 }
 
 /**
- * @brief 控制输入为遥控器(调试时)的模式和控制量设置
+ * @brief 对云台角度进行软件限位，防止超出机械边界(硬截断)
+ *        目前仅对 pitch 做限幅，yaw 可无限旋转
+ */
+static void GimbalPitchAngleLimit()
+{
+    gimbal_cmd_send.pitch = float_constrain(gimbal_cmd_send.pitch, PITCH_MIN_ANGLE, PITCH_MAX_ANGLE);
+}
+
+/**
+ * @brief 控制输入为遥控器(调试时)的模式和控制量设置。
  *
  */
-static void RemoteControlSet()
+static void RemoteControlSet(void)
 {
-    if (switch_is_down(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[下],小陀螺
-    {
-        chassis_cmd_send.chassis_mode = CHASSIS_ROTATE;
-        gimbal_cmd_send.gimbal_mode = GIMBAL_IMU_MODE;
-    }
-    else if (switch_is_mid(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[中],随动
-    {
-        chassis_cmd_send.chassis_mode = CHASSIS_FOLLOW_GIMBAL_YAW;
-        gimbal_cmd_send.gimbal_mode = GIMBAL_IMU_MODE;
-    }
-    else if (switch_is_up(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[上],初始状态
-    {
-        chassis_cmd_send.chassis_mode = CHASSIS_NO_FOLLOW;  //CHASSIS_ZERO_FORCE;
-        gimbal_cmd_send.gimbal_mode = GIMBAL_IMU_MODE;     //GIMBAL_ZERO_FORCE;
-    }
+    const uint8_t left_switch = rc_data[TEMP].rc.switch_left;
 
-    // 云台参数,确定云台控制数据
-    if (switch_is_mid(rc_data[TEMP].rc.switch_left)) // 左侧开关状态为[中],视觉模式
+    const uint8_t right_switch = rc_data[TEMP].rc.switch_right;
+
+    if (switch_is_mid(left_switch))
     {
-       // 切换为折叠态
+        // 左侧中档只更新请求状态。 最终是否进入 CHASSIS_FOLDED_ROTATE，交给仲裁函数根据 fold_state 决定。
+        gimbal_request_mode = GIMBAL_REQUEST_FOLD;
+        normal_chassis_mode = CHASSIS_NO_FOLLOW;
+
+        // 折叠完成后，yaw 拨杆作为底盘 wz。
+        chassis_cmd_send.wz = 8.0f * (float)rc_data[TEMP].rc.rocker_l_;
     }
-    // 左侧开关状态为[下],或视觉未识别到目标,纯遥控器拨杆控制
-    if (switch_is_down(rc_data[TEMP].rc.switch_left) || vision_recv_data->target_state == NO_TARGET)
-    { // 按照摇杆的输出大小进行角度增量,增益系数需调整
+    else if (switch_is_down(left_switch))
+    {
+        gimbal_request_mode = GIMBAL_REQUEST_DEPLOY;
+
+        if (switch_is_down(right_switch))
+        {
+            normal_chassis_mode = CHASSIS_ROTATE;               // 小陀螺模式
+        }
+        else if (switch_is_mid(right_switch))
+        {
+            normal_chassis_mode = CHASSIS_FOLLOW_GIMBAL_YAW;    // 部署模式的随动
+        }
+        else
+        {
+            normal_chassis_mode = CHASSIS_NO_FOLLOW;            // 自由模式
+        }
+        // 普通控制模式
         gimbal_cmd_send.yaw += 0.005f * (float)rc_data[TEMP].rc.rocker_l_;
         gimbal_cmd_send.pitch += 0.001f * (float)rc_data[TEMP].rc.rocker_l1;
-    }
-    // 云台软件限位
 
-    // 底盘参数,目前没有加入小陀螺(调试似乎暂时没有必要),系数需要调整
-    chassis_cmd_send.vx = 10.0f * (float)rc_data[TEMP].rc.rocker_r_; // _水平方向
-    chassis_cmd_send.vy = 10.0f * (float)rc_data[TEMP].rc.rocker_r1; // 1数值方向
+        chassis_cmd_send.vx = 10.0f * (float)rc_data[TEMP].rc.rocker_r_;
+        chassis_cmd_send.vy = 10.0f * (float)rc_data[TEMP].rc.rocker_r1;
+    }
+
+    gimbal_cmd_send.gimbal_mode = GIMBAL_IMU_MODE;
 
     // 发射参数
-    if (switch_is_up(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[上],弹舱打开
-        ;                                            // 弹舱舵机控制,待添加servo_motor模块,开启
-    else
-        ; // 弹舱舵机控制,待添加servo_motor模块,关闭
-
     // 摩擦轮控制,拨轮向上打为负,向下为正
     if (rc_data[TEMP].rc.dial < -100) // 向上超过100,打开摩擦轮
         shoot_cmd_send.friction_mode = FRICTION_ON;
@@ -154,86 +174,38 @@ static void RemoteControlSet()
 }
 
 /**
- * @brief 输入为键鼠时模式和控制量设置
+ * @brief 输入为图传时模式和控制量设置
  *
  */
-static void MouseKeySet()
+
+/**
+ * @brief 云台请求是本地请求状态，在最终仲裁阶段写入发送结构体。
+ */
+static void ArbitrateControlOutput(void)
 {
-    chassis_cmd_send.vx = rc_data[TEMP].key[KEY_PRESS].w * 300 - rc_data[TEMP].key[KEY_PRESS].s * 300; // 系数待测
-    chassis_cmd_send.vy = rc_data[TEMP].key[KEY_PRESS].s * 300 - rc_data[TEMP].key[KEY_PRESS].d * 300;
 
-    gimbal_cmd_send.yaw += (float)rc_data[TEMP].mouse.x / 660 * 10; // 系数待测
-    gimbal_cmd_send.pitch += (float)rc_data[TEMP].mouse.y / 660 * 10;
+    gimbal_cmd_send.request_mode = gimbal_request_mode;
 
-    switch (rc_data[TEMP].key_count[KEY_PRESS][Key_Z] % 3) // Z键设置弹速
+    switch (gimbal_fetch_data.fold_state)
     {
-    case 0:
-        shoot_cmd_send.bullet_speed = 15;
-        break;
-    case 1:
-        shoot_cmd_send.bullet_speed = 18;
-        break;
-    default:
-        shoot_cmd_send.bullet_speed = 30;
-        break;
-    }
-    switch (rc_data[TEMP].key_count[KEY_PRESS][Key_E] % 4) // E键设置发射模式
-    {
-    case 0:
-        shoot_cmd_send.load_mode = LOAD_STOP;
-        break;
-    case 1:
-        shoot_cmd_send.load_mode = LOAD_1_BULLET;
-        break;
-    case 2:
-        shoot_cmd_send.load_mode = LOAD_3_BULLET;
-        break;
-    default:
-        shoot_cmd_send.load_mode = LOAD_BURSTFIRE;
-        break;
-    }
-    switch (rc_data[TEMP].key_count[KEY_PRESS][Key_R] % 2) // R键开关弹舱
-    {
-    case 0:
-        shoot_cmd_send.lid_mode = LID_OPEN;
-        break;
-    default:
-        shoot_cmd_send.lid_mode = LID_CLOSE;
-        break;
-    }
-    switch (rc_data[TEMP].key_count[KEY_PRESS][Key_F] % 2) // F键开关摩擦轮
-    {
-    case 0:
-        shoot_cmd_send.friction_mode = FRICTION_OFF;
-        break;
-    default:
-        shoot_cmd_send.friction_mode = FRICTION_ON;
-        break;
-    }
-    switch (rc_data[TEMP].key_count[KEY_PRESS][Key_C] % 4) // C键设置底盘速度
-    {
-    case 0:
-        chassis_cmd_send.chassis_speed_buff = 40;
-        break;
-    case 1:
-        chassis_cmd_send.chassis_speed_buff = 60;
-        break;
-    case 2:
-        chassis_cmd_send.chassis_speed_buff = 80;
-        break;
-    default:
-        chassis_cmd_send.chassis_speed_buff = 100;
-        break;
-    }
-    switch (rc_data[TEMP].key[KEY_PRESS].shift) // 待添加 按shift允许超功率 消耗缓冲能量
-    {
-    case 1:
+        case GIMBAL_FOLDED:
+            chassis_cmd_send.chassis_mode = CHASSIS_FOLDED_ROTATE;
+            chassis_cmd_send.wz = float_constrain(chassis_cmd_send.wz, -4500.0f, 4500.0f);
+            break;
+        case GIMBAL_FOLDING:
+        case GIMBAL_UNFOLDING:
+            chassis_cmd_send.chassis_mode = CHASSIS_NO_FOLLOW;
+            chassis_cmd_send.wz = 0.0f;
+            break;
+        case GIMBAL_DEPLOYED:
+            chassis_cmd_send.chassis_mode = normal_chassis_mode;
+            chassis_cmd_send.wz = 0.0f;
+            break;
 
-        break;
-
-    default:
-
-        break;
+        default:
+            chassis_cmd_send.chassis_mode = CHASSIS_NO_FOLLOW;
+            chassis_cmd_send.wz = 0.0f;
+            break;
     }
 }
 
@@ -264,6 +236,7 @@ static void EmergencyHandler()
         shoot_cmd_send.shoot_mode = SHOOT_ON;
         LOGINFO("[CMD] reinstate, robot ready");
     }
+    GimbalPitchAngleLimit();
 }
 
 /* 机器人核心控制任务,200Hz频率运行(必须高于视觉发送频率) */
@@ -283,11 +256,12 @@ void RobotCMDTask()
     // 根据gimbal的反馈值计算云台和底盘正方向的夹角,不需要传参,通过static私有变量完成
     CalcOffsetAngle();
     // 根据遥控器左侧开关,确定当前使用的控制模式为遥控器调试还是键鼠
-    if (switch_is_down(rc_data[TEMP].rc.switch_left)) // 遥控器左侧开关状态为[下],遥控器控制
+    if (switch_is_down(rc_data[TEMP].rc.switch_left)  || switch_is_mid(rc_data[TEMP].rc.switch_left))
         RemoteControlSet();
     else if (switch_is_up(rc_data[TEMP].rc.switch_left)) // 遥控器左侧开关状态为[上],键盘控制
-        MouseKeySet();
 
+
+    ArbitrateControlOutput();
     EmergencyHandler(); // 处理模块离线和遥控器急停等紧急情况
 
     // 设置视觉发送数据,还需增加加速度和角速度数据
