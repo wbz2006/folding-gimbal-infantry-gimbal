@@ -71,6 +71,8 @@ static float uint_to_float(
  */
 static void DMMotorSetMode(DMMotor_Mode_e cmd, DMMotorInstance *motor)
 {
+    if (motor == NULL || motor->motor_can_instace == NULL)
+        return;
     memset(motor->motor_can_instace->tx_buff, 0xff, 7);
     motor->motor_can_instace->tx_buff[7] = (uint8_t)cmd;
     CANTransmit(motor->motor_can_instace, 1);
@@ -85,6 +87,8 @@ static void DMMotorSetMode(DMMotor_Mode_e cmd, DMMotorInstance *motor)
  */
 static void DMMotorDecode(CANInstance *motor_can)
 {
+    if (motor_can == NULL || motor_can->id == NULL || motor_can->rx_len < 8)
+        return;
     uint16_t tmp;
     uint8_t *rxbuff = motor_can->rx_buff;
     DMMotorInstance *motor = (DMMotorInstance *)motor_can->id;
@@ -133,6 +137,8 @@ static void DMMotorDecode(CANInstance *motor_can)
 static void DMMotorLostCallback(void *motor_ptr)
 {
     DMMotorInstance *motor = (DMMotorInstance *)motor_ptr;
+    if (motor == NULL)
+        return;
     motor->pid_ref = 0.0f;
     motor->stop_flag = MOTOR_STOP;
 }
@@ -264,6 +270,8 @@ static void DMMotorSendMIT(
     float kd,
     float torque_des)
 {
+    if (motor == NULL || motor->motor_can_instace == NULL)
+        return;
     if (motor->stop_flag == MOTOR_STOP)
     {
         position_des = 0.0f;
@@ -363,6 +371,11 @@ DMMotorInstance *DMMotorInit(Motor_Init_Config_s *config)
     config->can_init_config.can_module_callback = DMMotorDecode;
     config->can_init_config.id = motor;
     motor->motor_can_instace = CANRegister(&config->can_init_config);
+    if (motor->motor_can_instace == NULL)
+    {
+        free(motor);
+        return NULL;
+    }
 
     Daemon_Init_Config_s daemon_config = {
         .callback = DMMotorLostCallback,
@@ -370,6 +383,10 @@ DMMotorInstance *DMMotorInit(Motor_Init_Config_s *config)
         .reload_count = 10,
     };
     motor->motor_daemon = DaemonRegister(&daemon_config);
+    if (motor->motor_daemon == NULL)
+    {
+        DMMotorStop(motor);
+    }
 
     DMMotorEnable(motor);
     DMMotorSetMode(DM_CMD_MOTOR_MODE, motor);
@@ -389,6 +406,8 @@ DMMotorInstance *DMMotorInit(Motor_Init_Config_s *config)
  */
 void DMMotorSetRef(DMMotorInstance *motor, float ref)
 {
+    if (motor == NULL)
+        return;
     motor->pid_ref = ref;
 }
 
@@ -399,6 +418,8 @@ void DMMotorSetRef(DMMotorInstance *motor, float ref)
  */
 void DMMotorEnable(DMMotorInstance *motor)
 {
+    if (motor == NULL)
+        return;
     motor->stop_flag = MOTOR_ENALBED;
 }
 
@@ -411,6 +432,8 @@ void DMMotorEnable(DMMotorInstance *motor)
  */
 void DMMotorStop(DMMotorInstance *motor)
 {
+    if (motor == NULL)
+        return;
     motor->stop_flag = MOTOR_STOP;
 }
 
