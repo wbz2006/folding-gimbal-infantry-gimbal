@@ -248,7 +248,10 @@ void RobotCMDTask()
     SubGetMessage(chassis_feed_sub, (void *)&chassis_fetch_data);
 #endif // ONE_BOARD
 #ifdef GIMBAL_BOARD
-    chassis_fetch_data = *(Chassis_Upload_Data_s *)CANCommGet(cmd_can_comm);
+    if (!CANCommReceive(cmd_can_comm, &chassis_fetch_data))
+    {
+        memset(&chassis_fetch_data, 0, sizeof(chassis_fetch_data));
+    }
 #endif // GIMBAL_BOARD
     SubGetMessage(shoot_feed_sub, &shoot_fetch_data);
     SubGetMessage(gimbal_feed_sub, &gimbal_fetch_data);

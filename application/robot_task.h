@@ -48,8 +48,12 @@ void OSTaskInit()
     osThreadDef(robottask, StartROBOTTASK, osPriorityNormal, 0, 1024);
     robotTaskHandle = osThreadCreate(osThread(robottask), NULL);
 
+#if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
     osThreadDef(uitask, StartUITASK, osPriorityNormal, 0, 512);
     uiTaskHandle = osThreadCreate(osThread(uitask), NULL);
+#else
+    uiTaskHandle = NULL;
+#endif
 
     HTMotorControlInit(); // 没有注册HT电机则不会执行
 }

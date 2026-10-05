@@ -212,7 +212,11 @@ void ChassisTask()
     SubGetMessage(chassis_sub, &chassis_cmd_recv);
 #endif
 #ifdef CHASSIS_BOARD
-    chassis_cmd_recv = *(Chassis_Ctrl_Cmd_s *)CANCommGet(chasiss_can_comm);
+    if (!CANCommReceive(chasiss_can_comm, &chassis_cmd_recv))
+    {
+        memset(&chassis_cmd_recv, 0, sizeof(chassis_cmd_recv));
+        chassis_cmd_recv.chassis_mode = CHASSIS_ZERO_FORCE;
+    }
 #endif // CHASSIS_BOARD
 
     if (chassis_cmd_recv.chassis_mode == CHASSIS_ZERO_FORCE)

@@ -46,6 +46,9 @@ static fold_step_e fold_step = FOLD_STEP_LEVEL_UPPER_PITCH; // 折叠子步骤�
  */
 static bool GimbalTargetReached(const gimbal_reach_target_type_e target_type)
 {
+    if (yaw_motor == NULL || upper_pitch_motor == NULL ||
+        lower_pitch_motor == NULL || gimbal_IMU_data == NULL)
+        return false;
     switch (target_type)
     {
         case LOWER_PITCH_FOLD:
@@ -73,6 +76,8 @@ static bool GimbalTargetReached(const gimbal_reach_target_type_e target_type)
  */
 static void SetLowerPitchMIT(float position)
 {
+    if (lower_pitch_motor == NULL)
+        return;
     DMMotorSetMITRef(lower_pitch_motor, position, 0.0f, GIMBAL_LOWER_KP, GIMBAL_LOWER_KD, 0.0f);
     DMMotorEnable(lower_pitch_motor);
 }
@@ -111,16 +116,14 @@ static void UpdateFoldState(void)
     switch (gimbal_cmd_recv.request_mode)
     {
         case GIMBAL_REQUEST_FOLD:
-            if (fold_state == GIMBAL_DEPLOYED ||
-                fold_state == GIMBAL_UNFOLDING)
+            if (fold_state == GIMBAL_DEPLOYED || fold_state == GIMBAL_UNFOLDING)
             {
                 EnterFolding();
             }
             break;
 
         case GIMBAL_REQUEST_DEPLOY:
-            if (fold_state == GIMBAL_FOLDED ||
-                fold_state == GIMBAL_FOLDING)
+            if (fold_state == GIMBAL_FOLDED || fold_state == GIMBAL_FOLDING)
             {
                 EnterUnfolding();
             }
@@ -349,7 +352,8 @@ void GimbalInit()
     yaw_motor = DMMotorInit(&yaw_config);
     upper_pitch_motor = DMMotorInit(&upper_pitch_config);
     lower_pitch_motor = DMMotorInit(&lower_pitch_config);
-    lower_pitch_motor->control_mode = DMMOTOR_CONTROL_MIT;
+    if (lower_pitch_motor != NULL)
+        lower_pitch_motor->control_mode = DMMOTOR_CONTROL_MIT;
 
     gimbal_pub = PubRegister("gimbal_feed", sizeof(Gimbal_Upload_Data_s));
     gimbal_sub = SubRegister("gimbal_cmd", sizeof(Gimbal_Ctrl_Cmd_s));
@@ -361,6 +365,9 @@ void GimbalInit()
 
 void GimbalTask()
 {
+    if (yaw_motor == NULL || upper_pitch_motor == NULL ||
+        lower_pitch_motor == NULL || gimbal_IMU_data == NULL)
+        return;
 
     SubGetMessage(gimbal_sub, &gimbal_cmd_recv);
 
