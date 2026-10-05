@@ -6,9 +6,7 @@
             "type": "shell",
             "command": "mingw32-make",
             "args": [
-                "-C",
-                "D:/Users/Download/folding-gimbal-infantry-gimbal",
-                "-j4"
+                "-j24"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"
@@ -26,8 +24,6 @@
             "type": "shell",
             "command": "mingw32-make",
             "args": [
-                "-C",
-                "D:/Users/Download/folding-gimbal-infantry-gimbal",
                 "clean"
             ],
             "options": {

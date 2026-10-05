@@ -331,7 +331,7 @@ $(BUILD_DIR):
 # clean up
 #######################################
 clean:
-	rd $(BUILD_DIR) /s/q
+	$(RM) -rf $(BUILD_DIR)
   
 #######################################
 # dependencies

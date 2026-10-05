@@ -259,7 +259,7 @@ void RobotCMDTask()
     if (switch_is_down(rc_data[TEMP].rc.switch_left)  || switch_is_mid(rc_data[TEMP].rc.switch_left))
         RemoteControlSet();
     else if (switch_is_up(rc_data[TEMP].rc.switch_left)) // 遥控器左侧开关状态为[上],键盘控制
-
+        RemoteControlSet();
 
     ArbitrateControlOutput();
     EmergencyHandler(); // 处理模块离线和遥控器急停等紧急情况
