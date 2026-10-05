@@ -66,6 +66,8 @@ typedef struct _
     uint8_t rx_buff[8];            // 接收缓存,最大消息长度为8
     uint32_t rx_id;                // 接收id
     uint8_t rx_len;                // 接收长度,可能为0-8
+    volatile uint32_t rx_count;
+    volatile uint32_t tx_error_count;
     // 接收的回调函数,用于解析接收到的数据
     void (*can_module_callback)(struct _ *); // callback needs an instance to tell among registered ones
     void *id;                                // 使用can外设的模块指针(即id指向的模块拥有此can实例,是父子关系)
@@ -93,6 +95,9 @@ typedef struct
  * @return CANInstance* can instance owned by module
  */
 CANInstance *CANRegister(CAN_Init_Config_s *config);
+
+extern volatile uint32_t can_error_count;
+extern volatile uint32_t can_bus_off_count;
 
 /**
  * @brief 修改CAN发送报文的数据帧长度;注意最大长度为8,在没有进行修改的时候,默认长度为8
