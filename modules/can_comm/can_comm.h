@@ -20,6 +20,7 @@
 #define CAN_COMM_HEADER 's'      // 帧头
 #define CAN_COMM_TAIL 'e'        // 帧尾
 #define CAN_COMM_OFFSET_BYTES 4  // 's'+ datalen + 'e' + crc8
+#define CAN_COMM_OFFLINE_TX_PERIOD_MS 100U // 断线时仅保留低频探测，避免持续占满发送队列
 
 #pragma pack(1)
 /* CAN comm 结构体, 拥有CAN comm的app应该包含一个CAN comm指针 */
@@ -38,7 +39,13 @@ typedef struct
     /* 接收和更新标志位*/
     uint8_t recv_state;   // 接收状态,
     uint8_t cur_recv_len; // 当前已经接收到的数据长度(包括帧头帧尾datalen和校验和)
-    uint8_t update_flag;  // 数据更新标志位,当接收到新数据时,会将此标志位置1,调用CANCommGet()后会将此标志位置0
+    volatile uint8_t update_flag;  // 数据更新标志位
+    volatile uint32_t rx_ok_count;
+    volatile uint32_t rx_error_count;
+    volatile uint32_t tx_error_count;
+    volatile uint8_t has_rx_data;
+    uint32_t tx_attempt_count;
+    uint32_t last_tx_tick;
 
     DaemonInstance* comm_daemon;
 } CANCommInstance;
@@ -69,6 +76,9 @@ CANCommInstance *CANCommInit(CANComm_Init_Config_s *comm_config);
  * @param data 注意此地址的有效数据长度需要和初始化时传入的datalen相同
  */
 void CANCommSend(CANCommInstance *instance, uint8_t *data);
+
+/* 获取最近一次校验通过的数据；在线时即使本周期没有新帧也会返回1，断线返回0。 */
+uint8_t CANCommReceive(CANCommInstance *instance, void *data);
 
 /**
  * @brief 获取CANComm接收的数据,需要自己使用强制类型转换将返回的void指针转换成指定类型
