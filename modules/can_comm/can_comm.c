@@ -31,6 +31,18 @@ static void CANCommRxCallback(CANInstance *_instance)
         _instance->rx_len == 0 || _instance->rx_len > 8)
         return;
     CANCommInstance *comm = (CANCommInstance *)_instance->id; // 注意写法,将can instance的id强制转换为CANCommInstance*类型
+    if (comm->comm_daemon == NULL || !CANIsReady(_instance))
+        return;
+    const CANBusStatus *bus = CANGetBusStatus(_instance);
+    uint32_t now = HAL_GetTick();
+    if (comm->recv_state &&
+        ((uint32_t)(now - comm->rx_last_tick) >= CAN_COMM_RX_FRAGMENT_TIMEOUT_MS ||
+         comm->assembly_bus_off_count != bus->bus_off_count))
+    {
+        // 丢弃超时或跨越Bus-Off的半包；当前分片仍有机会作为新包起点。
+        comm->rx_error_count++;
+        CANCommResetRx(comm);
+    }
 
     /* 当前接收状态判断 */
     if (_instance->rx_buff[0] == CAN_COMM_HEADER && comm->recv_state == 0) // 之前尚未开始接收且此次包里第一个位置是帧头
@@ -39,6 +51,7 @@ static void CANCommRxCallback(CANInstance *_instance)
             _instance->rx_buff[1] == comm->recv_data_len) // 如果这一包里的datalen也等于我们设定接收长度(这是因为暂时不支持动态包长)
         {
             comm->recv_state = 1; // 设置接收状态为1,说明已经开始接收
+            comm->assembly_bus_off_count = bus->bus_off_count;
         }
         else
         {
@@ -52,6 +65,7 @@ static void CANCommRxCallback(CANInstance *_instance)
         // 如果已经接收到的长度加上当前一包的长度大于总buf len,说明接收错误
         if (comm->cur_recv_len + _instance->rx_len > comm->recv_buf_len)
         {
+            comm->rx_error_count++;
             CANCommResetRx(comm);
             return; // 重置状态然后返回
         }
@@ -59,6 +73,7 @@ static void CANCommRxCallback(CANInstance *_instance)
         // 直接把当前接收到的数据接到buffer后面
         memcpy(comm->raw_recvbuf + comm->cur_recv_len, _instance->rx_buff, _instance->rx_len);
         comm->cur_recv_len += _instance->rx_len;
+        comm->rx_last_tick = now;
 
         // 收完这一包以后刚好等于总buf len,说明已经收完了
         if (comm->cur_recv_len == comm->recv_buf_len)
@@ -71,8 +86,9 @@ static void CANCommRxCallback(CANInstance *_instance)
                     memcpy(comm->unpacked_recv_data, comm->raw_recvbuf + 2, comm->recv_data_len);
                     comm->update_flag = 1;           // 数据更新flag置为1
                     comm->has_rx_data = 1;
+                    comm->rx_bus_off_count = bus->bus_off_count;
                     comm->rx_ok_count++;
-                    DaemonReload(comm->comm_daemon); // 重载daemon,避免数据更新后一直不被读取而导致数据更新不及时
+                    DaemonReload(comm->comm_daemon); // 只有完整有效包才维持接收在线
                 }
                 else
                     comm->rx_error_count++;
@@ -90,8 +106,18 @@ static void CANCommLostCallback(void *cancomm)
     CANCommInstance *comm = (CANCommInstance *)cancomm;
     if (comm == NULL)
         return;
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    // 守护任务准备通知后可能被接收中断打断；已恢复时不能清掉新数据。
+    if (DaemonIsOnline(comm->comm_daemon))
+    {
+        __set_PRIMASK(primask);
+        return;
+    }
     CANCommResetRx(comm);
     comm->has_rx_data = 0;
+    comm->update_flag = 0;
+    __set_PRIMASK(primask);
     if (comm->can_ins != NULL)
         LOGWARNING("[can_comm] can comm rx[%lu] lost, reset rx state.",
                    (unsigned long)comm->can_ins->rx_id);
@@ -135,7 +161,7 @@ CANCommInstance *CANCommInit(CANComm_Init_Config_s *comm_config)
     ins->comm_daemon = DaemonRegister(&daemon_config);
     if (ins->comm_daemon == NULL)
     {
-        /* CAN实例已经注册，保留实例但发送/接收接口会安全地拒绝工作。 */
+        /* CAN已持有父实例指针，不能free；守护注册失败时收发均拒绝工作。 */
         return ins;
     }
     return ins;
@@ -143,37 +169,56 @@ CANCommInstance *CANCommInit(CANComm_Init_Config_s *comm_config)
 
 void CANCommSend(CANCommInstance *instance, uint8_t *data)
 {
-    if (instance == NULL || instance->can_ins == NULL || data == NULL)
+    if (instance == NULL || instance->can_ins == NULL || instance->comm_daemon == NULL || data == NULL)
         return;
 
-    uint32_t now = (uint32_t)DWT_GetTimeline_ms();
-    if (!CANCommIsOnline(instance) && instance->tx_attempt_count != 0U &&
-        (uint32_t)(now - instance->last_tx_tick) < CAN_COMM_OFFLINE_TX_PERIOD_MS)
+    // 每个控制周期把本实例所在总线的对端在线标志写入can_bus_status,供调试观测
+    CANSetLinkOnline(instance->can_ins, CANCommIsOnline(instance));
+
+    uint32_t now = HAL_GetTick();
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    if (instance->tx_busy || (!CANCommIsOnline(instance) && instance->tx_attempt_count != 0U &&
+        (uint32_t)(now - instance->last_tx_tick) < CAN_COMM_OFFLINE_TX_PERIOD_MS))
+    {
+        __set_PRIMASK(primask);
         return;
+    }
+    instance->tx_busy = 1;
     instance->last_tx_tick = now;
     instance->tx_attempt_count++;
+    __set_PRIMASK(primask);
 
-    static uint8_t crc8;
-    static uint8_t send_len;
+    uint8_t send_len;
     // 将data copy到raw_sendbuf中,计算crc8
     memcpy(instance->raw_sendbuf + 2, data, instance->send_data_len);
-    crc8 = crc_8(data, instance->send_data_len);
-    instance->raw_sendbuf[2 + instance->send_data_len] = crc8;
+    instance->raw_sendbuf[2 + instance->send_data_len] = crc_8(instance->raw_sendbuf + 2, instance->send_data_len);
 
+    float start = DWT_GetTimeline_ms();
     // CAN单次发送最大为8字节,如果超过8字节,需要分包发送
     for (size_t i = 0; i < instance->send_buf_len; i += 8)
     { // 如果是最后一包,send len将会小于8,要修改CAN的txconf中的DLC位,调用bsp_can提供的接口即可
         send_len = instance->send_buf_len - i >= 8 ? 8 : instance->send_buf_len - i;
         CANSetDLC(instance->can_ins, send_len);
         memcpy(instance->can_ins->tx_buff, instance->raw_sendbuf + i, send_len);
-        if (!CANTransmit(instance->can_ins, 1))
+        float remaining = CAN_COMM_TX_BUDGET_MS - (DWT_GetTimeline_ms() - start);
+        if (remaining < 0)
+            remaining = 0;
+        if (!CANTransmit(instance->can_ins, remaining))
+        {
             instance->tx_error_count++;
+            break; // 首片失败后停止本包，避免继续发送已无法完整组包的后续片
+        }
     }
+    primask = __get_PRIMASK();
+    __disable_irq();
+    instance->tx_busy = 0;
+    __set_PRIMASK(primask);
 }
 
 void *CANCommGet(CANCommInstance *instance)
 {
-    if (instance == NULL)
+    if (!CANCommIsOnline(instance))
         return NULL;
     instance->update_flag = 0; // 读取后将更新flag置为0
     return instance->unpacked_recv_data;
@@ -181,19 +226,29 @@ void *CANCommGet(CANCommInstance *instance)
 
 uint8_t CANCommReceive(CANCommInstance *instance, void *data)
 {
-    if (instance == NULL || instance->can_ins == NULL ||
-        instance->comm_daemon == NULL || data == NULL ||
-        !instance->has_rx_data || !CANCommIsOnline(instance))
+    if (instance == NULL || data == NULL)
         return 0;
-
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    if (!CANCommIsOnline(instance))
+    {
+        __set_PRIMASK(primask);
+        return 0;
+    }
+    // 检查、整包复制、清更新标志在同一短临界区，防止读到新旧混合数据。
     memcpy(data, instance->unpacked_recv_data, instance->recv_data_len);
     instance->update_flag = 0;
+    __set_PRIMASK(primask);
     return 1;
 }
 
 uint8_t CANCommIsOnline(CANCommInstance *instance)
 {
-    return instance != NULL && instance->comm_daemon != NULL &&
-           instance->can_ins != NULL && instance->has_rx_data &&
+    if (instance == NULL || instance->comm_daemon == NULL ||
+        !instance->has_rx_data || !CANIsReady(instance->can_ins))
+        return 0;
+    const CANBusStatus *bus = CANGetBusStatus(instance->can_ins);
+    // 硬件恢复后必须重新收到完整有效包，不能重新放行故障前的命令。
+    return bus != NULL && instance->rx_bus_off_count == bus->bus_off_count &&
            DaemonIsOnline(instance->comm_daemon);
 }

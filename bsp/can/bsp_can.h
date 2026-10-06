@@ -34,6 +34,7 @@
 // 如果只有1个CAN,还需要把bsp_can.c中所有的hcan2变量改为hcan1(别担心,主要是总线和FIFO的负载均衡,不影响功能)
 #endif
 
+#ifdef FDCAN
 // 定义查找表
 static const uint32_t DLC_LookUp_Table[9] = {
     FDCAN_DLC_BYTES_0,
@@ -46,11 +47,11 @@ static const uint32_t DLC_LookUp_Table[9] = {
     FDCAN_DLC_BYTES_7,
     FDCAN_DLC_BYTES_8
 };
+#endif
 
 
 
 /* can instance typedef, every module registered to CAN should have this variable */
-#pragma pack(1)
 typedef struct _
 {
 #ifdef FDCAN
@@ -72,7 +73,30 @@ typedef struct _
     void (*can_module_callback)(struct _ *); // callback needs an instance to tell among registered ones
     void *id;                                // 使用can外设的模块指针(即id指向的模块拥有此can实例,是父子关系)
 } CANInstance;
-#pragma pack()
+
+/* 内部实例使用自然对齐；只有线上payload结构需要双方约定布局。 */
+typedef enum
+{
+    CAN_BUS_RUNNING = 0,
+    CAN_BUS_WAIT_RETRY,
+    CAN_BUS_RECOVERING,
+} CANBusState;
+
+typedef struct
+{
+    volatile CANBusState state;
+    volatile uint32_t error_count;
+    volatile uint32_t bus_off_count;
+    volatile uint32_t recovery_attempt_count;
+    volatile uint32_t recovery_success_count; // 控制器退出Bus-Off，不代表对端在线
+    volatile uint32_t recovery_timeout_count;
+    volatile uint32_t recovery_error_count; // 恢复请求/启动/通知接口返回失败
+    volatile uint32_t rx_drop_count;
+    volatile uint32_t tec; // ECR.TEC发送错误计数,无ACK时持续上升(>255触发Bus-Off);0=总线被正常应答
+    volatile uint32_t rec; // ECR.REC接收错误计数
+    volatile uint8_t online; // 该总线上双板通信对端在线标志(由can_comm发送周期刷新);0=对端离线/尚未上线
+    uint32_t last_recovery_tick;
+} CANBusStatus;
 
 /* CAN实例初始化结构体,将此结构体指针传入注册函数 */
 typedef struct
@@ -98,6 +122,15 @@ CANInstance *CANRegister(CAN_Init_Config_s *config);
 
 extern volatile uint32_t can_error_count;
 extern volatile uint32_t can_bus_off_count;
+extern CANBusStatus can_bus_status[DEVICE_CAN_CNT]; // 下标0/1/2对应CAN1/2/3
+
+/* 由DaemonTask周期调用，任务上下文维护各总线；中断只记录错误状态。 */
+void CANServiceTask(void);
+uint8_t CANIsReady(const CANInstance *instance);
+const CANBusStatus *CANGetBusStatus(const CANInstance *instance);
+
+/* 由can_comm在其发送周期调用,把实例所在总线的对端在线标志写入can_bus_status[bus].online */
+void CANSetLinkOnline(const CANInstance *instance, uint8_t online);
 
 /**
  * @brief 修改CAN发送报文的数据帧长度;注意最大长度为8,在没有进行修改的时候,默认长度为8
@@ -115,6 +148,7 @@ void CANSetDLC(CANInstance *_instance, uint8_t length);
  * 
  * @param timeout 超时时间,单位为ms;后续改为us,获得更精确的控制
  * @param _instance* can instance owned by module
+ * @return 1仅表示提交到硬件发送队列，0表示失败或正在恢复。
  */
 uint8_t CANTransmit(CANInstance *_instance,float timeout);
 

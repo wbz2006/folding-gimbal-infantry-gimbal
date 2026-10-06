@@ -3,6 +3,7 @@
 #include "stdlib.h"
 #include "memory.h"
 #include "buzzer.h"
+#include "bsp_can.h"
 
 // 用于保存所有的daemon instance
 static DaemonInstance *daemon_instances[DAEMON_MX_CNT] = {NULL};
@@ -30,8 +31,11 @@ void DaemonReload(DaemonInstance *instance)
 {
     if (instance == NULL)
         return;
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
     instance->temp_count = instance->reload_count;
     instance->offline_reported = 0;
+    __set_PRIMASK(primask);
 }
 
 uint8_t DaemonIsOnline(DaemonInstance *instance)
@@ -41,19 +45,27 @@ uint8_t DaemonIsOnline(DaemonInstance *instance)
 
 void DaemonTask()
 {
+    CANServiceTask(); // 在现有10ms任务中维护CAN，各应用无需额外调用
     DaemonInstance *dins; // 提高可读性同时降低访存开销
     for (size_t i = 0; i < idx; ++i)
     {
 
         dins = daemon_instances[i];
+        offline_callback callback = NULL;
+        uint32_t primask = __get_PRIMASK();
+        __disable_irq();
         if (dins->temp_count > 0) // 如果计数器还有值,说明上一次喂狗后还没有超时,则计数器减一
             dins->temp_count--;
         else if (dins->callback && !dins->offline_reported) // 只在首次超时时通知一次
         {
             dins->offline_reported = 1;
-            dins->callback(dins->owner_id); // module内可以将owner_id强制类型转换成自身类型从而调用特定module的offline callback
+            callback = dins->callback;
             // @todo 为蜂鸣器/led等增加离线报警的功能,非常关键!
         }
+        __set_PRIMASK(primask);
+        // 回调可能较慢；在临界区外执行。模块应防止迟到回调清掉已恢复数据。
+        if (callback != NULL)
+            callback(dins->owner_id);
     }
 }
 // (需要id的原因是什么?) 下面是copilot的回答!
