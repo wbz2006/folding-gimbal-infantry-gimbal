@@ -33,8 +33,11 @@
 #define YAW_CHASSIS_ALIGN_ECD 2711  // 云台和底盘对齐指向相同方向时的电机编码器值,若对云台有机械改动需要修改
 #define YAW_ECD_GREATER_THAN_4096 0 // ALIGN_ECD值是否大于4096,是为1,否为0;用于计算云台偏转角度
 #define PITCH_HORIZON_ECD 3412      // 云台处于水平位置时编码器值,若对云台有机械改动需要修改
-#define PITCH_MAX_ANGLE 0           // 云台竖直方向最大角度 (注意反馈如果是陀螺仪，则填写陀螺仪的角度)
-#define PITCH_MIN_ANGLE 0           // 云台竖直方向最小角度 (注意反馈如果是陀螺仪，则填写陀螺仪的角度)
+#define PITCH_MAX_ANGLE 0           // 部署机械限幅，缺少可靠标定，保守保留 0°，待实机标定
+#define PITCH_MIN_ANGLE 0           // 部署机械限幅；与折叠强制零位分离
+#define GIMBAL_FOLD_UPPER_PITCH_TARGET_DEG 0.0f // 上下云台控制共用的 IMU Pitch 水平目标
+#define APP_COMMAND_TIMEOUT_MS 50U   // 应用控制命令新鲜度上限，daemon 周期换算见 daemon.h
+#define APP_FEEDBACK_TIMEOUT_MS 50U  // 应用反馈新鲜度上限，待调度实测确认
 // 发射参数
 #define ONE_BULLET_DELTA_ANGLE 36    // 发射一发弹丸拨盘转动的距离,由机械设计图纸给出
 #define REDUCTION_RATIO_LOADER 49.0f // 拨盘电机的减速比,英雄需要修改为3508的19.0f
@@ -90,7 +93,7 @@ typedef enum
     CHASSIS_ROTATE,            // 小陀螺模式
     CHASSIS_NO_FOLLOW,         // 不跟随，允许全向平移
     CHASSIS_FOLLOW_GIMBAL_YAW, // 跟随模式，底盘叠加角度环控制
-    CHASSIS_FOLDED_ROTATE,     // 云台折叠状态下的跟随模式
+    CHASSIS_FOLDED_ROTATE = 4, // 废弃，保留协议编号；CMD 不再发送
 } chassis_mode_e;
 
 // 云台模式设置
@@ -120,7 +123,6 @@ typedef enum
 typedef enum
 {
     FOLD_STEP_LEVEL_UPPER_PITCH,
-    FOLD_STEP_CENTER_YAW,
     FOLD_STEP_MOVE_LOWER_PITCH,
     FOLD_STEP_FINISH,
 } fold_step_e;
@@ -129,7 +131,6 @@ typedef enum
 {
     LOWER_PITCH_FOLD,
     LOWER_PITCH_DEPLOY,
-    YAW_FOLD,
     UPPER_PITCH_FOLD,
 } gimbal_reach_target_type_e;
 
@@ -228,21 +229,33 @@ typedef struct
     uint8_t rest_heat;           // 剩余枪口热量
     Bullet_Speed_e bullet_speed; // 弹速限制
     Enemy_Color_e enemy_color;   // 0 for blue, 1 for red
+    uint8_t fault_flags;         // 底盘应用故障；双板时随反馈一起回传 CMD
 
 } Chassis_Upload_Data_s;
 
 
+typedef enum
+{
+    APP_FAULT_NONE = 0,
+    APP_FAULT_COMMAND_STALE = 1U << 0,
+    APP_FAULT_FEEDBACK_STALE = 1U << 1,
+    APP_FAULT_ACTION_TIMEOUT = 1U << 2,
+    APP_FAULT_INVALID_COMMAND = 1U << 3,
+} App_Fault_Flag_e;
+
 typedef struct
 {
     attitude_t gimbal_imu_data;
-    uint16_t yaw_motor_single_round_angle;
+    float yaw_motor_single_round_angle; // 本地反馈，degree，保留达妙角度小数
 
     gimbal_fold_state_e fold_state;
+    uint8_t feedback_valid; // 三电机与 IMU 均有有效且新鲜的反馈
+    uint8_t fault_flags;    // 云台应用故障；CMD 汇总后执行停机仲裁
 } Gimbal_Upload_Data_s;
 
 typedef struct
 {
-    uint8_t reserved;
+    uint8_t fault_flags; // 发射应用故障；CMD 汇总后执行停机仲裁
     // code to go here
     // ...
 } Shoot_Upload_Data_s;

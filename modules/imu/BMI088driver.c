@@ -19,6 +19,9 @@ uint8_t caliOffset = 1;
 int16_t caliCount = 0;
 
 IMU_Data_t BMI088;
+static uint8_t read_valid;
+
+uint8_t BMI088_IsReadValid(void) { return read_valid; }
 
 #if defined(BMI088_USE_SPI)
 
@@ -148,7 +151,11 @@ void Calibrate_MPU_Offset(IMU_Data_t *bmi088)
 
         for (uint16_t i = 0; i < CaliTimes; ++i)
         {
-            BMI088_accel_read_muli_reg(BMI088_ACCEL_XOUT_L, buf, 6);
+            BMI088_SPI_Read_OK = 1;
+    uint8_t accel_id;
+    BMI088_accel_read_single_reg(BMI088_ACC_CHIP_ID, accel_id);
+    read_valid = accel_id == BMI088_ACC_CHIP_ID_VALUE;
+    BMI088_accel_read_muli_reg(BMI088_ACCEL_XOUT_L, buf, 6);
             bmi088_raw_temp = (int16_t)((buf[1]) << 8) | buf[0];
             bmi088->Accel[0] = bmi088_raw_temp * BMI088_ACCEL_SEN;
             bmi088_raw_temp = (int16_t)((buf[3]) << 8) | buf[2];
@@ -332,6 +339,10 @@ void BMI088_Read(IMU_Data_t *bmi088)
     static uint8_t buf[8] = {0};
     static int16_t bmi088_raw_temp;
 
+    BMI088_SPI_Read_OK = 1;
+    uint8_t accel_id;
+    BMI088_accel_read_single_reg(BMI088_ACC_CHIP_ID, accel_id);
+    read_valid = accel_id == BMI088_ACC_CHIP_ID_VALUE;
     BMI088_accel_read_muli_reg(BMI088_ACCEL_XOUT_L, buf, 6);
 
     bmi088_raw_temp = (int16_t)((buf[1]) << 8) | buf[0];
@@ -342,6 +353,7 @@ void BMI088_Read(IMU_Data_t *bmi088)
     bmi088->Accel[2] = bmi088_raw_temp * BMI088_ACCEL_SEN * bmi088->AccelScale;
 
     BMI088_gyro_read_muli_reg(BMI088_GYRO_CHIP_ID, buf, 8);
+    read_valid = read_valid && buf[0] == BMI088_GYRO_CHIP_ID_VALUE;
     if (buf[0] == BMI088_GYRO_CHIP_ID_VALUE)
     {
         if (caliOffset)
@@ -373,6 +385,7 @@ void BMI088_Read(IMU_Data_t *bmi088)
     }
 
     bmi088->Temperature = bmi088_raw_temp * BMI088_TEMP_FACTOR + BMI088_TEMP_OFFSET;
+    read_valid = read_valid && BMI088_SPI_Read_OK;
 }
 
 #if defined(BMI088_USE_SPI)

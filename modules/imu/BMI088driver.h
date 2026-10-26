@@ -129,5 +129,6 @@ extern uint8_t bmi088_gyro_init(void);
  * @param bmi088 传入BMI088实例(结构体)
  */
 extern void BMI088_Read(IMU_Data_t *bmi088);
+uint8_t BMI088_IsReadValid(void);
 
 #endif

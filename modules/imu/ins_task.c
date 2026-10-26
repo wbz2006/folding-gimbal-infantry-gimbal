@@ -20,8 +20,15 @@
 #include "general_def.h"
 #include "master_process.h"
 #include "arm_math.h"
+#include "daemon.h"
 
 static INS_t INS;
+static DaemonInstance *ins_feedback_daemon;
+
+uint8_t INS_IsFeedbackValid(void)
+{
+    return BMI088_IsReadValid() && DaemonIsOnline(ins_feedback_daemon);
+}
 static IMU_Param_t IMU_Param;
 static PIDInstance TempCtrl = {0};
 
@@ -89,6 +96,11 @@ attitude_t *INS_Init(void)
 
     while (BMI088Init(&hspi2, 1) != BMI088_NO_ERROR)
         ;
+    Daemon_Init_Config_s daemon_config = {
+        .reload_count = DAEMON_COUNT_FROM_MS(INS_FEEDBACK_TIMEOUT_MS),
+        .require_first_reload = 1,
+    };
+    ins_feedback_daemon = DaemonRegister(&daemon_config);
     IMU_Param.scale[X] = 1;
     IMU_Param.scale[Y] = 1;
     IMU_Param.scale[Z] = 1;
@@ -129,6 +141,10 @@ void INS_Task(void)
     if ((count % 1) == 0)
     {
         BMI088_Read(&BMI088);
+        if (!BMI088_IsReadValid())
+        {
+            return;
+        }
 
         INS.Accel[X] = BMI088.Accel[X];
         INS.Accel[Y] = BMI088.Accel[Y];
@@ -167,6 +183,7 @@ void INS_Task(void)
         INS.Pitch = QEKF_INS.Pitch;
         INS.Roll = QEKF_INS.Roll;
         INS.YawTotalAngle = QEKF_INS.YawTotalAngle;
+        DaemonReload(ins_feedback_daemon);
 
         VisionSetAltitude(INS.Yaw, INS.Pitch, INS.Roll);
     }

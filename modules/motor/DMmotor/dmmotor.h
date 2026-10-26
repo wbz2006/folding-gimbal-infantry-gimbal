@@ -127,6 +127,7 @@ typedef struct
     Motor_Working_Type_e stop_flag;             /**< 电机启停状态。 */
     CANInstance *motor_can_instace;             /**< 绑定的 CAN 实例。 */
     DaemonInstance *motor_daemon;               /**< 反馈离线监测实例。 */
+    volatile uint32_t feedback_bus_off_count;
     uint32_t lost_cnt;                          /**< 预留离线计数。 */
 } DMMotorInstance;
 
@@ -261,5 +262,7 @@ void DMMotorControl(void);
  *       使用统一的 DMMotorControl() 时不要再调用该接口，否则 MIT 电机会重复发送。
  */
 void DMMotorMITControl(void);
+
+uint8_t DMMotorIsFeedbackValid(DMMotorInstance *motor);
 
 #endif /* DMMOTOR_H */

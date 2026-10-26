@@ -22,6 +22,8 @@ DaemonInstance *DaemonRegister(Daemon_Init_Config_s *config)
     instance->reload_count = config->reload_count == 0 ? 100 : config->reload_count; // 默认值为100
     instance->callback = config->callback;
     instance->temp_count = config->init_count == 0 ? instance->reload_count : config->init_count;
+    instance->has_reloaded = !config->require_first_reload;
+    instance->offline_reported = config->require_first_reload != 0;
     daemon_instances[idx++] = instance;
     return instance;
 }
@@ -34,13 +36,53 @@ void DaemonReload(DaemonInstance *instance)
     uint32_t primask = __get_PRIMASK();
     __disable_irq();
     instance->temp_count = instance->reload_count;
+    instance->has_reloaded = 1;
     instance->offline_reported = 0;
     __set_PRIMASK(primask);
 }
 
 uint8_t DaemonIsOnline(DaemonInstance *instance)
 {
-    return instance != NULL && instance->temp_count > 0;
+    return instance != NULL && instance->has_reloaded && instance->temp_count > 0;
+}
+
+uint8_t DaemonHasReloaded(DaemonInstance *instance)
+{
+    return instance != NULL && instance->has_reloaded;
+}
+
+void DaemonSetFeedbackValid(DaemonInstance *instance, uint8_t valid)
+{
+    if (instance != NULL)
+        instance->feedback_valid = valid != 0;
+}
+
+uint8_t DaemonIsFeedbackValid(DaemonInstance *instance)
+{
+    return instance != NULL && instance->feedback_valid;
+}
+
+void DaemonSetFaultFlags(DaemonInstance *instance, uint32_t fault_flags)
+{
+    if (instance != NULL)
+        instance->fault_flags = fault_flags;
+}
+
+void DaemonAddFaultFlags(DaemonInstance *instance, uint32_t fault_flags)
+{
+    if (instance != NULL)
+        instance->fault_flags |= fault_flags;
+}
+
+void DaemonClearFaultFlags(DaemonInstance *instance, uint32_t fault_flags)
+{
+    if (instance != NULL)
+        instance->fault_flags &= ~fault_flags;
+}
+
+uint32_t DaemonGetFaultFlags(DaemonInstance *instance)
+{
+    return instance != NULL ? instance->fault_flags : UINT32_MAX;
 }
 
 void DaemonTask()
@@ -56,7 +98,7 @@ void DaemonTask()
         __disable_irq();
         if (dins->temp_count > 0) // 如果计数器还有值,说明上一次喂狗后还没有超时,则计数器减一
             dins->temp_count--;
-        else if (dins->callback && !dins->offline_reported) // 只在首次超时时通知一次
+        else if (dins->has_reloaded && dins->callback && !dins->offline_reported) // 首次数据后只在离线边沿通知一次
         {
             dins->offline_reported = 1;
             callback = dins->callback;

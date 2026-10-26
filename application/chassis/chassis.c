@@ -16,6 +16,7 @@
 #include "dji_motor.h"
 #include "super_cap.h"
 #include "message_center.h"
+#include "daemon.h"
 #include "referee_task.h"
 
 #include "general_def.h"
@@ -39,6 +40,7 @@ attitude_t *Chassis_IMU_data;
 #ifdef ONE_BOARD
 static Publisher_t *chassis_pub;                    // 用于发布底盘的数据
 static Subscriber_t *chassis_sub;                   // 用于订阅底盘的控制命令
+static DaemonInstance *chassis_cmd_daemon;
 #endif                                              // !ONE_BOARD
 static Chassis_Ctrl_Cmd_s chassis_cmd_recv;         // 底盘接收到的控制命令
 static Chassis_Upload_Data_s chassis_feedback_data; // 底盘回传的反馈数据
@@ -126,6 +128,7 @@ void ChassisInit()
         },
         .recv_data_len = sizeof(Chassis_Ctrl_Cmd_s),
         .send_data_len = sizeof(Chassis_Upload_Data_s),
+        .daemon_count = DAEMON_COUNT_FROM_MS(APP_COMMAND_TIMEOUT_MS),
     };
     chasiss_can_comm = CANCommInit(&comm_conf); // can comm初始化
 #endif                                          // CHASSIS_BOARD
@@ -133,6 +136,11 @@ void ChassisInit()
 #ifdef ONE_BOARD // 单板控制整车,则通过pubsub来传递消息
     chassis_sub = SubRegister("chassis_cmd", sizeof(Chassis_Ctrl_Cmd_s));
     chassis_pub = PubRegister("chassis_feed", sizeof(Chassis_Upload_Data_s));
+    Daemon_Init_Config_s cmd_daemon_config = {
+        .reload_count = DAEMON_COUNT_FROM_MS(APP_COMMAND_TIMEOUT_MS),
+        .require_first_reload = 1,
+    };
+    chassis_cmd_daemon = DaemonRegister(&cmd_daemon_config);
 #endif // ONE_BOARD
 }
 
@@ -206,18 +214,43 @@ static void EstimateSpeed()
 /* 机器人底盘控制核心任务 */
 void ChassisTask()
 {
-    // 后续增加没收到消息的处理(双板的情况)
-    // 获取新的控制信息
+    uint8_t command_received = 0;
 #ifdef ONE_BOARD
-    SubGetMessage(chassis_sub, &chassis_cmd_recv);
+    command_received = SubGetMessage(chassis_sub, &chassis_cmd_recv);
+    if (command_received)
+        DaemonReload(chassis_cmd_daemon);
 #endif
 #ifdef CHASSIS_BOARD
-    if (!CANCommReceive(chasiss_can_comm, &chassis_cmd_recv))
+    command_received = CANCommReceive(chasiss_can_comm, &chassis_cmd_recv);
+#endif
+
+    chassis_feedback_data.fault_flags = APP_FAULT_NONE;
+#ifdef ONE_BOARD
+    if (!DaemonIsOnline(chassis_cmd_daemon))
+        chassis_feedback_data.fault_flags |= APP_FAULT_COMMAND_STALE;
+#else
+    if (!command_received)
+        chassis_feedback_data.fault_flags |= APP_FAULT_COMMAND_STALE;
+#endif
+
+    if (motor_lf == NULL || motor_rf == NULL || motor_lb == NULL || motor_rb == NULL ||
+        motor_lf->daemon == NULL || motor_rf->daemon == NULL ||
+        motor_lb->daemon == NULL || motor_rb->daemon == NULL ||
+        !DaemonIsOnline(motor_lf->daemon) || !DaemonIsOnline(motor_rf->daemon) ||
+        !DaemonIsOnline(motor_lb->daemon) || !DaemonIsOnline(motor_rb->daemon))
+        chassis_feedback_data.fault_flags |= APP_FAULT_FEEDBACK_STALE;
+
+    if (chassis_cmd_recv.chassis_mode != CHASSIS_ZERO_FORCE &&
+        chassis_cmd_recv.chassis_mode != CHASSIS_ROTATE &&
+        chassis_cmd_recv.chassis_mode != CHASSIS_NO_FOLLOW &&
+        chassis_cmd_recv.chassis_mode != CHASSIS_FOLLOW_GIMBAL_YAW)
+        chassis_feedback_data.fault_flags |= APP_FAULT_INVALID_COMMAND;
+
+    if (chassis_feedback_data.fault_flags != APP_FAULT_NONE)
     {
         memset(&chassis_cmd_recv, 0, sizeof(chassis_cmd_recv));
         chassis_cmd_recv.chassis_mode = CHASSIS_ZERO_FORCE;
     }
-#endif // CHASSIS_BOARD
 
     if (chassis_cmd_recv.chassis_mode == CHASSIS_ZERO_FORCE)
     { // 如果出现重要模块离线或遥控器设置为急停,让电机停止
@@ -248,8 +281,6 @@ void ChassisTask()
     case CHASSIS_ROTATE: // 自旋,同时保持全向机动;当前wz维持定值,后续增加不规则的变速策略
         chassis_cmd_recv.wz = 4000;
         break;
-    case CHASSIS_FOLDED_ROTATE:
-        
     default:
         break;
     }

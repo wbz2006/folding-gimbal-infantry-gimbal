@@ -94,8 +94,8 @@ static void DMMotorDecode(CANInstance *motor_can)
     DMMotorInstance *motor = (DMMotorInstance *)motor_can->id;
     DM_Motor_Measure_s *measure = &motor->measure;
 
-    DaemonReload(motor->motor_daemon);
-
+    measure->id = rxbuff[0] & 0x0f;
+    measure->state = rxbuff[0] >> 4;
     measure->last_position = measure->position;
 
     tmp = (uint16_t)((rxbuff[1] << 8) | rxbuff[2]);
@@ -125,6 +125,22 @@ static void DMMotorDecode(CANInstance *motor_can)
 
     measure->T_Mos = (float)rxbuff[6];
     measure->T_Rotor = (float)rxbuff[7];
+    const CANBusStatus *bus = CANGetBusStatus(motor_can);
+    motor->feedback_bus_off_count = bus != NULL ? bus->bus_off_count : 0;
+    DaemonReload(motor->motor_daemon);
+}
+
+uint8_t DMMotorIsFeedbackValid(DMMotorInstance *motor)
+{
+    if (motor == NULL || motor->motor_can_instace == NULL ||
+        !CANIsReady(motor->motor_can_instace) ||
+        !DaemonIsOnline(motor->motor_daemon))
+        return 0;
+    const CANBusStatus *bus = CANGetBusStatus(motor->motor_can_instace);
+    return bus != NULL && motor->feedback_bus_off_count == bus->bus_off_count &&
+           motor->measure.state == 1 && // DM 状态 1：使能；0 失能，8..E 为错误
+           isfinite(motor->measure.position) && isfinite(motor->measure.velocity) &&
+           isfinite(motor->measure.angle_single_round);
 }
 
 /**
@@ -381,6 +397,7 @@ DMMotorInstance *DMMotorInit(Motor_Init_Config_s *config)
         .callback = DMMotorLostCallback,
         .owner_id = motor,
         .reload_count = 10,
+        .require_first_reload = 1,
     };
     motor->motor_daemon = DaemonRegister(&daemon_config);
     if (motor->motor_daemon == NULL)
@@ -558,6 +575,11 @@ void DMMotorSetMITRef(
  */
 static void DMMotorControlOne(DMMotorInstance *motor)
 {
+    if (motor->stop_flag == MOTOR_STOP)
+    {
+        DMMotorSendMIT(motor, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+        return; // 停机期间不积累 PID 历史
+    }
     switch (motor->control_mode)
     {
         case DMMOTOR_CONTROL_EXTERNAL_IMPEDANCE:

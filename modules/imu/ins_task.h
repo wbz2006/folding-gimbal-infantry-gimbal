@@ -24,6 +24,7 @@
 #define Z 2
 
 #define INS_TASK_PERIOD 1
+#define INS_FEEDBACK_TIMEOUT_MS 20U // 1kHz 解算反馈的新鲜度上限，待调度实测确认
 
 typedef struct
 {
@@ -90,6 +91,7 @@ attitude_t *INS_Init(void);
  *
  */
 void INS_Task(void);
+uint8_t INS_IsFeedbackValid(void);
 
 /**
  * @brief 四元数更新函数,即实现dq/dt=0.5Ωq

@@ -3,8 +3,11 @@
 
 #include "dji_motor.h"
 #include "message_center.h"
+#include "daemon.h"
 #include "bsp_dwt.h"
 #include "general_def.h"
+#include <math.h>
+#include <stdbool.h>
 
 /* 对于双发射机构的机器人,将下面的数据封装成结构体即可,生成两份shoot应用实例 */
 static DJIMotorInstance *friction_l, *friction_r, *loader; // 拨盘电机
@@ -14,6 +17,7 @@ static Publisher_t *shoot_pub;
 static Shoot_Ctrl_Cmd_s shoot_cmd_recv; // 来自cmd的发射控制信息
 static Subscriber_t *shoot_sub;
 static Shoot_Upload_Data_s shoot_feedback_data; // 来自cmd的发射控制信息
+static DaemonInstance *shoot_cmd_daemon;
 
 // dwt定时,计算冷却用
 static float hibernate_time = 0, dead_time = 0;
@@ -102,13 +106,55 @@ void ShootInit()
 
     shoot_pub = PubRegister("shoot_feed", sizeof(Shoot_Upload_Data_s));
     shoot_sub = SubRegister("shoot_cmd", sizeof(Shoot_Ctrl_Cmd_s));
+    Daemon_Init_Config_s cmd_daemon_config = {
+        .reload_count = DAEMON_COUNT_FROM_MS(APP_COMMAND_TIMEOUT_MS),
+        .require_first_reload = 1,
+    };
+    shoot_cmd_daemon = DaemonRegister(&cmd_daemon_config);
 }
 
 /* 机器人发射机构控制核心任务 */
 void ShootTask()
 {
     // 从cmd获取控制数据
-    SubGetMessage(shoot_sub, &shoot_cmd_recv);
+    bool message_received = SubGetMessage(shoot_sub, &shoot_cmd_recv);
+    bool command_valid = (shoot_cmd_recv.shoot_mode == SHOOT_OFF || shoot_cmd_recv.shoot_mode == SHOOT_ON) &&
+                         (shoot_cmd_recv.load_mode == LOAD_STOP || shoot_cmd_recv.load_mode == LOAD_REVERSE ||
+                          shoot_cmd_recv.load_mode == LOAD_1_BULLET || shoot_cmd_recv.load_mode == LOAD_3_BULLET ||
+                          shoot_cmd_recv.load_mode == LOAD_BURSTFIRE) &&
+                         (shoot_cmd_recv.lid_mode == LID_OPEN || shoot_cmd_recv.lid_mode == LID_CLOSE) &&
+                         (shoot_cmd_recv.friction_mode == FRICTION_OFF || shoot_cmd_recv.friction_mode == FRICTION_ON) &&
+                         (shoot_cmd_recv.bullet_speed == BULLET_SPEED_NONE || shoot_cmd_recv.bullet_speed == BIG_AMU_10 ||
+                          shoot_cmd_recv.bullet_speed == SMALL_AMU_15 || shoot_cmd_recv.bullet_speed == BIG_AMU_16 ||
+                          shoot_cmd_recv.bullet_speed == SMALL_AMU_18 || shoot_cmd_recv.bullet_speed == SMALL_AMU_30) &&
+                         isfinite(shoot_cmd_recv.shoot_rate) && shoot_cmd_recv.shoot_rate >= 0.0f;
+    if (message_received && command_valid)
+        DaemonReload(shoot_cmd_daemon);
+
+    uint8_t fault_flags = APP_FAULT_NONE;
+    if (!DaemonIsOnline(shoot_cmd_daemon))
+        fault_flags |= APP_FAULT_COMMAND_STALE;
+    if (!command_valid)
+        fault_flags |= APP_FAULT_INVALID_COMMAND;
+    const bool feedback_valid = friction_l != NULL && friction_r != NULL && loader != NULL &&
+        friction_l->daemon != NULL && friction_r->daemon != NULL && loader->daemon != NULL &&
+        DaemonIsOnline(friction_l->daemon) && DaemonIsOnline(friction_r->daemon) &&
+        DaemonIsOnline(loader->daemon);
+    DaemonSetFeedbackValid(shoot_cmd_daemon, feedback_valid);
+    if (!feedback_valid)
+        fault_flags |= APP_FAULT_FEEDBACK_STALE;
+
+    DaemonSetFaultFlags(shoot_cmd_daemon, fault_flags);
+    fault_flags = (uint8_t)DaemonGetFaultFlags(shoot_cmd_daemon);
+    shoot_feedback_data.fault_flags = fault_flags;
+    if (fault_flags != APP_FAULT_NONE)
+    {
+        if (friction_l != NULL) DJIMotorStop(friction_l);
+        if (friction_r != NULL) DJIMotorStop(friction_r);
+        if (loader != NULL) DJIMotorStop(loader);
+        PubPushMessage(shoot_pub, &shoot_feedback_data);
+        return;
+    }
 
     // 对shoot mode等于SHOOT_STOP的情况特殊处理,直接停止所有电机(紧急停止)
     if (shoot_cmd_recv.shoot_mode == SHOOT_OFF)

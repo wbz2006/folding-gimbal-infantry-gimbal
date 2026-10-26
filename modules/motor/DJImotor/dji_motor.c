@@ -161,7 +161,6 @@ static void DecodeDJIMotor(CANInstance *_instance)
     DJIMotorInstance *motor = (DJIMotorInstance *)_instance->id;
     DJI_Motor_Measure_s *measure = &motor->measure; // measure要多次使用,保存指针减小访存开销
 
-    DaemonReload(motor->daemon);
     motor->dt = DWT_GetDeltaT(&motor->feed_cnt);
 
     // 解析数据并对电流和速度进行滤波,电机的反馈报文具体格式见电机说明手册
@@ -180,6 +179,7 @@ static void DecodeDJIMotor(CANInstance *_instance)
     else if (measure->ecd - measure->last_ecd < -4096)
         measure->total_round++;
     measure->total_angle = measure->total_round * 360 + measure->angle_single_round;
+    DaemonReload(motor->daemon);
 }
 
 static void DJIMotorLostCallback(void *motor_ptr)
@@ -222,6 +222,7 @@ DJIMotorInstance *DJIMotorInit(Motor_Init_Config_s *config)
         .callback = DJIMotorLostCallback,
         .owner_id = instance,
         .reload_count = 2, // 20ms未收到数据则丢失
+        .require_first_reload = 1,
     };
     instance->daemon = DaemonRegister(&daemon_config);
 
