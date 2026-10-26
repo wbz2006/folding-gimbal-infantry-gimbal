@@ -50,9 +50,9 @@
 #define RADIUS_WHEEL 60             // 轮子半径
 #define REDUCTION_RATIO_WHEEL 19.0f // 电机减速比,因为编码器量测的是转子的速度而不是输出轴的速度故需进行转换
 
-#define GYRO2GIMBAL_DIR_YAW 1   // 陀螺仪数据相较于云台的yaw的方向,1为相同,-1为相反
-#define GYRO2GIMBAL_DIR_PITCH 1 // 陀螺仪数据相较于云台的pitch的方向,1为相同,-1为相反
-#define GYRO2GIMBAL_DIR_ROLL 1  // 陀螺仪数据相较于云台的roll的方向,1为相同,-1为相反
+#define GYRO2GIMBAL_DIR_YAW 1       // 陀螺仪数据相较于云台的yaw的方向,1为相同,-1为相反
+#define GYRO2GIMBAL_DIR_PITCH 1     // 陀螺仪数据相较于云台的pitch的方向,1为相同,-1为相反
+#define GYRO2GIMBAL_DIR_ROLL 1      // 陀螺仪数据相较于云台的roll的方向,1为相同,-1为相反
 
 // 检查是否出现主控板定义冲突,只允许一个开发板定义存在,否则编译会自动报错
 #if (defined(ONE_BOARD) && defined(CHASSIS_BOARD)) || \
@@ -89,49 +89,48 @@ typedef enum
  */
 typedef enum
 {
-    CHASSIS_ZERO_FORCE = 0,    // 电流零输入
-    CHASSIS_ROTATE,            // 小陀螺模式
-    CHASSIS_NO_FOLLOW,         // 不跟随，允许全向平移
-    CHASSIS_FOLLOW_GIMBAL_YAW, // 跟随模式，底盘叠加角度环控制
-    CHASSIS_FOLDED_ROTATE = 4, // 废弃，保留协议编号；CMD 不再发送
+    CHASSIS_ZERO_FORCE = 0,         // 电流零输入
+    CHASSIS_ROTATE,                 // 小陀螺模式
+    CHASSIS_NO_FOLLOW,              // 不跟随，允许全向平移
+    CHASSIS_FOLLOW_GIMBAL_YAW,      // 跟随模式，底盘叠加角度环控制
 } chassis_mode_e;
 
 // 云台模式设置
 typedef enum
 {
-    GIMBAL_ZERO_FORCE = 0, // 电流零输入
-    GIMBAL_IMU_MODE,      // 云台陀螺仪反馈模式,反馈值为陀螺仪pitch,total_yaw_angle,底盘可以为小陀螺和跟随模式
+    GIMBAL_ZERO_FORCE = 0,          // 电流零输入
+    GIMBAL_IMU_MODE,                // 云台陀螺仪反馈模式,反馈值为陀螺仪pitch,total_yaw_angle,底盘可以为小陀螺和跟随模式
 } gimbal_mode_e;
 
 // 云台折叠状态机
 typedef enum
 {
-    GIMBAL_FOLDED = 0,      // 折叠状态
-    GIMBAL_FOLDING,         // 折叠过程状态
-    GIMBAL_UNFOLDING,       // 展开过程状态
-    GIMBAL_DEPLOYED,        // 部署状态
+    GIMBAL_FOLDED = 0,              // 折叠状态
+    GIMBAL_FOLDING,                 // 折叠过程状态
+    GIMBAL_UNFOLDING,               // 展开过程状态
+    GIMBAL_DEPLOYED,                // 部署状态
 } gimbal_fold_state_e;
 
 // 云台折叠请求状态机
 typedef enum
 {
-    GIMBAL_REQUEST_FOLD = 0, // 请求折叠
-    GIMBAL_REQUEST_DEPLOY,   // 请求展开
+    GIMBAL_REQUEST_FOLD = 0,        // 请求折叠
+    GIMBAL_REQUEST_DEPLOY,          // 请求展开
 } gimbal_request_mode_e;
 
 // 云台折叠步骤状态机
 typedef enum
 {
-    FOLD_STEP_LEVEL_UPPER_PITCH,
-    FOLD_STEP_MOVE_LOWER_PITCH,
-    FOLD_STEP_FINISH,
+    FOLD_STEP_LEVEL_UPPER_PITCH,    // 上pitch水平
+    FOLD_STEP_MOVE_LOWER_PITCH,     // 下pitch就位
+    FOLD_STEP_FINISH,               // 折叠完成
 } fold_step_e;
 
 typedef enum
 {
-    LOWER_PITCH_FOLD,
-    LOWER_PITCH_DEPLOY,
-    UPPER_PITCH_FOLD,
+    LOWER_PITCH_FOLD,               // 下pitch折叠到位
+    LOWER_PITCH_DEPLOY,             // 下pitch部署到位
+    UPPER_PITCH_FOLD,               // 上pitch折叠到位
 } gimbal_reach_target_type_e;
 
 // 发射模式设置
@@ -142,8 +141,8 @@ typedef enum
 } shoot_mode_e;
 typedef enum
 {
-    FRICTION_OFF = 0, // 摩擦轮关闭
-    FRICTION_ON,      // 摩擦轮开启
+    FRICTION_OFF = 0,               // 摩擦轮关闭
+    FRICTION_ON,                    // 摩擦轮开启
 } friction_mode_e;
 
 typedef enum

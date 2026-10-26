@@ -84,6 +84,13 @@ typedef struct
 DJIMotorInstance *DJIMotorInit(Motor_Init_Config_s *config);
 
 /**
+ * @brief 清除DJI电机各PID环的运行状态，保留PID控制参数。
+ *
+ * @param motor 电机实例
+ */
+void DJIMotorResetPIDState(DJIMotorInstance *motor);
+
+/**
  * @brief 被application层的应用调用,给电机设定参考值.
  *        对于应用,可以将电机视为传递函数为1的设备,不需要关心底层的闭环
  *

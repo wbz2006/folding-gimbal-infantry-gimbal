@@ -231,6 +231,21 @@ DJIMotorInstance *DJIMotorInit(Motor_Init_Config_s *config)
     return instance;
 }
 
+/**
+ * @brief 清除DJI电机各PID环的运行状态，保留PID控制参数。
+ *
+ * @param motor 电机实例
+ */
+void DJIMotorResetPIDState(DJIMotorInstance *motor)
+{
+    if (motor == NULL)
+        return;
+
+    PIDResetState(&motor->motor_controller.angle_PID);
+    PIDResetState(&motor->motor_controller.speed_PID);
+    PIDResetState(&motor->motor_controller.current_PID);
+}
+
 /* 电流只能通过电机自带传感器监测,后续考虑加入力矩传感器应变片等 */
 void DJIMotorChangeFeed(DJIMotorInstance *motor, Closeloop_Type_e loop, Feedback_Source_e type)
 {

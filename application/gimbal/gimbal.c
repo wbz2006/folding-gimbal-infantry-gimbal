@@ -27,8 +27,6 @@
 #include "user_lib.h"
 #include <math.h>
 #include <stdbool.h>
-#include <stddef.h>
-#include <string.h>
 
 /* 折叠/展开过渡参数。位置沿用当前配置；速度、稳定时长、超时均为待实机确认的调试初值。 */
 #define GIMBAL_FOLD_LOWER_PITCH_TARGET_RAD    (-1.0f) // 下 Pitch 折叠收纳位，rad
@@ -85,14 +83,26 @@ static GimbalFoldCtrl_s fold_ctrl = {
  */
 static bool GimbalTargetReached(gimbal_reach_target_type_e target)
 {
-    if (target == UPPER_PITCH_FOLD) // 上 Pitch：IMU 角度进入水平目标容差且角速度足够小
+    switch (target)
+    {
+    case UPPER_PITCH_FOLD:      // 上pitch到位判断
         return fabsf(gimbal_IMU_data->Pitch - GIMBAL_FOLD_UPPER_PITCH_TARGET_DEG) <=
-                   GIMBAL_UPPER_PITCH_TOLERANCE_DEG &&
+               GIMBAL_UPPER_PITCH_TOLERANCE_DEG &&
                fabsf(gimbal_IMU_data->Gyro[0]) <= GIMBAL_UPPER_STABLE_SPEED_RAD_S;
-    float position = target == LOWER_PITCH_DEPLOY ? GIMBAL_DEPLOY_LOWER_PITCH_TARGET_RAD : // 展开工作位
-                                                  GIMBAL_FOLD_LOWER_PITCH_TARGET_RAD;     // 折叠收纳位
-    return fabsf(lower_pitch_motor->measure.position - position) <= GIMBAL_LOWER_PITCH_TOLERANCE_RAD &&
-           fabsf(lower_pitch_motor->measure.velocity) <= GIMBAL_LOWER_STABLE_SPEED_RAD_S;
+
+    case LOWER_PITCH_DEPLOY:    // 下pitch部署到位判断
+        return fabsf(lower_pitch_motor->measure.position - GIMBAL_DEPLOY_LOWER_PITCH_TARGET_RAD) <=
+               GIMBAL_LOWER_PITCH_TOLERANCE_RAD &&
+               fabsf(lower_pitch_motor->measure.velocity) <= GIMBAL_LOWER_STABLE_SPEED_RAD_S;
+
+    case LOWER_PITCH_FOLD:      // 下pitch折叠到位判断
+        return fabsf(lower_pitch_motor->measure.position - GIMBAL_FOLD_LOWER_PITCH_TARGET_RAD) <=
+               GIMBAL_LOWER_PITCH_TOLERANCE_RAD &&
+               fabsf(lower_pitch_motor->measure.velocity) <= GIMBAL_LOWER_STABLE_SPEED_RAD_S;
+
+    default:
+        return false;
+    }
 }
 
 /**
@@ -107,7 +117,12 @@ static void UpdateFoldState(uint32_t now)
 {
     gimbal_fold_state_e next_state = fold_ctrl.state;
     if (!fold_ctrl.active) // 停机恢复后的首次进入：直接按当前请求方向起步
-        next_state = gimbal_cmd_recv.request_mode == GIMBAL_REQUEST_FOLD ? GIMBAL_FOLDING : GIMBAL_UNFOLDING;
+    {
+        if (gimbal_cmd_recv.request_mode == GIMBAL_REQUEST_FOLD)
+            next_state = GIMBAL_FOLDING;
+        else
+            next_state = GIMBAL_UNFOLDING;
+    }
     else if (gimbal_cmd_recv.request_mode == GIMBAL_REQUEST_FOLD &&
              (fold_ctrl.state == GIMBAL_UNFOLDING || fold_ctrl.state == GIMBAL_DEPLOYED))
         next_state = GIMBAL_FOLDING; // 反向：展开中/已展开 -> 折叠
@@ -123,18 +138,8 @@ static void UpdateFoldState(uint32_t now)
         fold_ctrl.lower_ref = lower_pitch_motor->measure.position; // 参考从实际位置出发，起步无阶跃
         fold_ctrl.upper_stable.tracking = fold_ctrl.finish_stable.tracking = false;
         fold_ctrl.action_start = fold_ctrl.last_run = now;
-        DMMotorInstance *motors[] = {yaw_motor, upper_pitch_motor};
-        for (size_t i = 0; i < sizeof(motors) / sizeof(motors[0]); ++i)
-        {
-            PIDInstance *pids[] = {&motors[i]->angle_PID, &motors[i]->speed_PID, &motors[i]->current_PID};
-            for (size_t j = 0; j < sizeof(pids) / sizeof(pids[0]); ++j)
-            {
-                // 清空 Measure 起的全部运行时状态(测量/误差/积分/输出)，保留其前的 PID 参数
-                memset((char *)pids[j] + offsetof(PIDInstance, Measure), 0,
-                       sizeof(*pids[j]) - offsetof(PIDInstance, Measure));
-                DWT_GetDeltaT(&pids[j]->DWT_CNT); // 重置计时基准，恢复后首周期不会用到过大的 dt
-            }
-        }
+        DMMotorResetPIDState(yaw_motor);
+        DMMotorResetPIDState(upper_pitch_motor);
     }
     fold_ctrl.active = true; // 标记过渡控制已激活，此后仅反向请求会重置上下文
 }
@@ -223,7 +228,7 @@ static void RunTransition(uint32_t now, float lower_target, gimbal_reach_target_
 void GimbalInit()
 {   
     gimbal_IMU_data = INS_Init(); // IMU先初始化,获取姿态数据指针赋给yaw电机的其他数据来源
-    // YAW 电机：对 IMU 连续角闭环，上电目标即为零，保持静止直到收到指令
+    // YAW 电机
     Motor_Init_Config_s yaw_config = {
         .can_init_config = {
             .can_handle = &hcan3,
@@ -259,7 +264,7 @@ void GimbalInit()
             .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
         },
         .motor_type = DM4340};
-    // 上 PITCH 电机(俯仰工作轴)：反馈取 IMU 的 Pitch/Gyro[X]，角度环以水平为零位
+    // 上 PITCH
     Motor_Init_Config_s upper_pitch_config = {
         .can_init_config = {
             .can_handle = &hcan3,
@@ -295,7 +300,7 @@ void GimbalInit()
         },
         .motor_type = DM4310,
     };
-    // 下 PITCH 电机(折叠轴)：使用电机自身反馈，实际由下方 MIT 位置模式控制
+    // 下 PITCH
     Motor_Init_Config_s lower_pitch_config = {
         .can_init_config = {
             .can_handle = &hcan3,
@@ -356,17 +361,18 @@ void GimbalTask()
 {
     const uint32_t now = HAL_GetTick();
 
-    // 1. 接收命令，检查命令与反馈有效性。
+    /* 1. 读取输入并计算本周期的命令/反馈健康状态。 */
     const bool command_received = SubGetMessage(gimbal_sub, &gimbal_cmd_recv);
-    // 命令字段全部合法才喂狗：异常命令不允许刷新新鲜度
-    if (command_received &&
+    // 命令字段全部合法才喂狗；异常命令不允许刷新新鲜度。
+    const bool command_fields_valid =
         isfinite(gimbal_cmd_recv.yaw) && isfinite(gimbal_cmd_recv.pitch) &&
         (gimbal_cmd_recv.gimbal_mode == GIMBAL_IMU_MODE ||
          gimbal_cmd_recv.gimbal_mode == GIMBAL_ZERO_FORCE) &&
         (gimbal_cmd_recv.request_mode == GIMBAL_REQUEST_FOLD ||
-         gimbal_cmd_recv.request_mode == GIMBAL_REQUEST_DEPLOY))
+         gimbal_cmd_recv.request_mode == GIMBAL_REQUEST_DEPLOY);
+    if (command_received && command_fields_valid)
         DaemonReload(gimbal_cmd_daemon);
-    // 本地反馈有效：IMU 解算与三台电机反馈均在线、新鲜且数值为有限值
+    // 本地反馈有效：IMU 解算与三台电机反馈均在线、新鲜且数值为有限值。
     const bool feedback_valid = gimbal_IMU_data != NULL && INS_IsFeedbackValid() &&
         DMMotorIsFeedbackValid(yaw_motor) &&
         DMMotorIsFeedbackValid(upper_pitch_motor) &&
@@ -374,17 +380,10 @@ void GimbalTask()
         isfinite(gimbal_IMU_data->YawTotalAngle) && isfinite(gimbal_IMU_data->Pitch) &&
         isfinite(gimbal_IMU_data->Gyro[0]) && isfinite(gimbal_IMU_data->Gyro[2]);
     DaemonSetFeedbackValid(gimbal_cmd_daemon, feedback_valid);
-    // 字段合法性(与喂狗条件一致)，对最后一次收到的命令逐周期持续检查
-    const bool command_fields_valid = isfinite(gimbal_cmd_recv.yaw) && isfinite(gimbal_cmd_recv.pitch) &&
-        (gimbal_cmd_recv.gimbal_mode == GIMBAL_IMU_MODE ||
-         gimbal_cmd_recv.gimbal_mode == GIMBAL_ZERO_FORCE) &&
-        (gimbal_cmd_recv.request_mode == GIMBAL_REQUEST_FOLD ||
-         gimbal_cmd_recv.request_mode == GIMBAL_REQUEST_DEPLOY);
     const bool command_fresh = DaemonIsOnline(gimbal_cmd_daemon);
     const bool command_valid = command_fresh && command_fields_valid;
 
-    // 2. 锁存应用故障；有效反馈下收到 CMD 停机确认后才清除。
-    // CMD 仍锁存 STOP，只有故障清除、输入与反馈有效且右上档才恢复。
+    /* 2. 锁存应用故障；有效反馈下收到 CMD 停机确认后才清除。 */
     const bool command_was_seen = DaemonHasReloaded(gimbal_cmd_daemon);
     if (command_was_seen && !feedback_valid)
         DaemonAddFaultFlags(gimbal_cmd_daemon, APP_FAULT_FEEDBACK_STALE);
@@ -395,12 +394,12 @@ void GimbalTask()
     if (command_valid && feedback_valid && gimbal_cmd_recv.gimbal_mode == GIMBAL_ZERO_FORCE)
         DaemonSetFaultFlags(gimbal_cmd_daemon, APP_FAULT_NONE);
 
-    // 放行条件：反馈与命令均有效、无锁存故障、且 CMD 要求 IMU 闭环模式
+    // 放行条件：反馈与命令均有效、无锁存故障，且 CMD 要求 IMU 闭环模式。
     bool control_allowed = DaemonIsFeedbackValid(gimbal_cmd_daemon) && command_valid &&
                            DaemonGetFaultFlags(gimbal_cmd_daemon) == APP_FAULT_NONE &&
                            gimbal_cmd_recv.gimbal_mode == GIMBAL_IMU_MODE;
 
-    // 3. 执行过渡动作，或保持已完成形态。
+    /* 3. 执行折叠/展开过渡，或保持已完成形态。 */
     if (control_allowed)
     {
         UpdateFoldState(now);
@@ -409,23 +408,36 @@ void GimbalTask()
         DMMotorEnable(yaw_motor);
         DMMotorEnable(upper_pitch_motor);
 
-        if (transitioning) // 过渡中：按方向选用目标，执行共用过渡流程
+        if (transitioning) // 过渡中：按方向选用目标，执行共用过渡流程。
         {
-            const bool folding = fold_ctrl.state == GIMBAL_FOLDING;
-            RunTransition(now,
-                folding ? GIMBAL_FOLD_LOWER_PITCH_TARGET_RAD : GIMBAL_DEPLOY_LOWER_PITCH_TARGET_RAD,
-                folding ? LOWER_PITCH_FOLD : LOWER_PITCH_DEPLOY,
-                folding ? GIMBAL_FOLDED : GIMBAL_DEPLOYED);
+            if (fold_ctrl.state == GIMBAL_FOLDING)
+            {
+                RunTransition(now, GIMBAL_FOLD_LOWER_PITCH_TARGET_RAD,
+                              LOWER_PITCH_FOLD, GIMBAL_FOLDED);
+            }
+            else
+            {
+                RunTransition(now, GIMBAL_DEPLOY_LOWER_PITCH_TARGET_RAD,
+                              LOWER_PITCH_DEPLOY, GIMBAL_DEPLOYED);
+            }
         }
-        else // 完成态：Yaw/上Pitch 跟随 CMD 目标，下 Pitch 保持对应形态的位置
+        else // 完成态：Yaw/上Pitch 跟随 CMD 目标，下 Pitch 保持对应形态的位置。
         {
             const bool folded = fold_ctrl.state == GIMBAL_FOLDED;
+            float lower_target;
             DMMotorSetRef(yaw_motor, gimbal_cmd_recv.yaw);
-            DMMotorSetRef(upper_pitch_motor, folded ?
-                          GIMBAL_FOLD_UPPER_PITCH_TARGET_DEG : gimbal_cmd_recv.pitch);
-            DMMotorSetMITRef(lower_pitch_motor,
-                folded ? GIMBAL_FOLD_LOWER_PITCH_TARGET_RAD : GIMBAL_DEPLOY_LOWER_PITCH_TARGET_RAD,
-                0.0f, GIMBAL_LOWER_KP, GIMBAL_LOWER_KD, 0.0f);
+            if (folded)
+            {
+                DMMotorSetRef(upper_pitch_motor, GIMBAL_FOLD_UPPER_PITCH_TARGET_DEG);
+                lower_target = GIMBAL_FOLD_LOWER_PITCH_TARGET_RAD;
+            }
+            else
+            {
+                DMMotorSetRef(upper_pitch_motor, gimbal_cmd_recv.pitch);
+                lower_target = GIMBAL_DEPLOY_LOWER_PITCH_TARGET_RAD;
+            }
+            DMMotorSetMITRef(lower_pitch_motor, lower_target, 0.0f,
+                             GIMBAL_LOWER_KP, GIMBAL_LOWER_KD, 0.0f);
             DMMotorEnable(lower_pitch_motor);
         }
 
@@ -439,7 +451,7 @@ void GimbalTask()
         fold_ctrl.last_run = now;
     }
 
-    // 4. 统一停机覆盖；此后不再放行电机或上报完成形态。
+    /* 4. 统一停机覆盖；此后不再放行电机或上报完成形态。 */
     if (!control_allowed)
     {
         DMMotorStop(yaw_motor);
@@ -447,11 +459,13 @@ void GimbalTask()
         DMMotorStop(lower_pitch_motor);
         fold_ctrl.active = false; // 恢复后由 UpdateFoldState 重新进入并重置上下文
         // 状态复位为请求方向的过程态，避免上报与请求矛盾的"完成"形态
-        fold_ctrl.state = gimbal_cmd_recv.request_mode == GIMBAL_REQUEST_DEPLOY ?
-                          GIMBAL_UNFOLDING : GIMBAL_FOLDING;
+        if (gimbal_cmd_recv.request_mode == GIMBAL_REQUEST_DEPLOY)
+            fold_ctrl.state = GIMBAL_UNFOLDING;
+        else
+            fold_ctrl.state = GIMBAL_FOLDING;
     }
 
-    // 5. 发布本周期反馈。
+    /* 5. 发布本周期反馈。 */
     if (gimbal_IMU_data != NULL)
         gimbal_feedback_data.gimbal_imu_data = *gimbal_IMU_data;
     gimbal_feedback_data.yaw_motor_single_round_angle = yaw_motor != NULL ?

@@ -416,6 +416,21 @@ DMMotorInstance *DMMotorInit(Motor_Init_Config_s *config)
 }
 
 /**
+ * @brief 清除达妙电机各PID环的运行状态，保留PID控制参数。
+ *
+ * @param motor 电机实例。
+ */
+void DMMotorResetPIDState(DMMotorInstance *motor)
+{
+    if (motor == NULL)
+        return;
+
+    PIDResetState(&motor->angle_PID);
+    PIDResetState(&motor->speed_PID);
+    PIDResetState(&motor->current_PID);
+}
+
+/**
  * @brief 设置外部多环 PID 的参考输入。
  *
  * @param motor 电机实例。

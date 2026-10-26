@@ -124,6 +124,12 @@ typedef struct // config parameter
 void PIDInit(PIDInstance *pid, PID_Init_Config_s *config);
 
 /**
+ * @brief 清除PID运行状态，保留控制参数，并重置周期计时基准
+ * @param pid PID实例
+ */
+void PIDResetState(PIDInstance *pid);
+
+/**
  * @brief 计算PID输出
  *
  * @param pid     PID实例指针
