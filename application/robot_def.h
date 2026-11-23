@@ -15,6 +15,7 @@
 #include "ins_task.h"
 #include "master_process.h"
 #include "stdint.h"
+#include "daemon.h"
 
 /* 开发板类型定义,烧录时注意不要弄错对应功能;修改定义后需要重新编译,只能存在一个定义! */
 // #define ONE_BOARD // 单板控制整车
@@ -22,7 +23,7 @@
 #define GIMBAL_BOARD  //云台板
 
 //#define VISION_USE_VCP  // 使用虚拟串口发送视觉数据
-#define VISION_USE_UART // 使用串口发送视觉数据
+// #define VISION_USE_UART // 当前不使用视觉串口
 
 // 底盘运动学类型
 //#define CHASSIS_DRIVE_MECANUM     // 麦克纳姆轮
@@ -31,25 +32,30 @@
 /* 机器人重要参数定义,注意根据不同机器人进行修改,浮点数需要以.0或f结尾,无符号以u结尾 */
 // 云台参数
 #define YAW_CHASSIS_ALIGN_ECD 2711  // 云台和底盘对齐指向相同方向时的电机编码器值,若对云台有机械改动需要修改
+#define GIMBAL_YAW_MECHANICAL_CENTER_DEG 0.0f // Yaw 机械中位的电机单圈角，degree；待实测替换
 #define YAW_ECD_GREATER_THAN_4096 0 // ALIGN_ECD值是否大于4096,是为1,否为0;用于计算云台偏转角度
 #define PITCH_HORIZON_ECD 3412      // 云台处于水平位置时编码器值,若对云台有机械改动需要修改
-#define PITCH_MAX_ANGLE 0           // 云台竖直方向最大角度 (注意反馈如果是陀螺仪，则填写陀螺仪的角度)
-#define PITCH_MIN_ANGLE 0           // 云台竖直方向最小角度 (注意反馈如果是陀螺仪，则填写陀螺仪的角度)
+#define PITCH_MAX_ANGLE 25.0f       // 部署态上 Pitch 相对水平位置的目标上限，deg
+#define PITCH_MIN_ANGLE (-35.0f)    // 部署态上 Pitch 相对水平位置的目标下限，deg
+#define APP_COMMAND_TIMEOUT_MS 50U   // 应用控制命令新鲜度上限，daemon 周期换算见 daemon.h
+#define APP_FEEDBACK_TIMEOUT_MS 50U  // 应用反馈新鲜度上限，待调度实测确认
 // 发射参数
-#define ONE_BULLET_DELTA_ANGLE 36    // 发射一发弹丸拨盘转动的距离,由机械设计图纸给出
-#define REDUCTION_RATIO_LOADER 49.0f // 拨盘电机的减速比,英雄需要修改为3508的19.0f
 #define NUM_PER_CIRCLE 10            // 拨盘一圈的装载量
+#define REDUCTION_RATIO_LOADER 1.0f  // DM4310 直驱拨盘
+#define ONE_BULLET_DELTA_ANGLE (360.0f / NUM_PER_CIRCLE)    // 发射一发弹丸拨盘转动的距离,由机械设计图纸给出
+
 // 机器人底盘修改的参数,单位为mm(毫米)
 #define WHEEL_BASE 350              // 纵向轴距(前进后退方向)
 #define TRACK_WIDTH 300             // 横向轮距(左右平移方向)
 #define CENTER_GIMBAL_OFFSET_X 0    // 云台旋转中心距底盘几何中心的距离,前后方向,云台位于正中心时默认设为0
 #define CENTER_GIMBAL_OFFSET_Y 0    // 云台旋转中心距底盘几何中心的距离,左右方向,云台位于正中心时默认设为0
 #define RADIUS_WHEEL 60             // 轮子半径
-#define REDUCTION_RATIO_WHEEL 19.0f // 电机减速比,因为编码器量测的是转子的速度而不是输出轴的速度故需进行转换
+#define REDUCTION_RATIO_WHEEL 19.0f // 保留当前全向轮减速比
+#define CHASSIS_MAX_WHEEL_SPEED (6000.0f / 60.0f * (2.0f * 3.14159265358979323846f * RADIUS_WHEEL) / REDUCTION_RATIO_WHEEL) // 6000 rpm 换算为轮面 mm/s
 
-#define GYRO2GIMBAL_DIR_YAW 1   // 陀螺仪数据相较于云台的yaw的方向,1为相同,-1为相反
-#define GYRO2GIMBAL_DIR_PITCH 1 // 陀螺仪数据相较于云台的pitch的方向,1为相同,-1为相反
-#define GYRO2GIMBAL_DIR_ROLL 1  // 陀螺仪数据相较于云台的roll的方向,1为相同,-1为相反
+#define GYRO2GIMBAL_DIR_YAW 1       // 陀螺仪数据相较于云台的yaw的方向,1为相同,-1为相反
+#define GYRO2GIMBAL_DIR_PITCH 1     // 陀螺仪数据相较于云台的pitch的方向,1为相同,-1为相反
+#define GYRO2GIMBAL_DIR_ROLL 1      // 陀螺仪数据相较于云台的roll的方向,1为相同,-1为相反
 
 // 检查是否出现主控板定义冲突,只允许一个开发板定义存在,否则编译会自动报错
 #if (defined(ONE_BOARD) && defined(CHASSIS_BOARD)) || \
@@ -86,51 +92,51 @@ typedef enum
  */
 typedef enum
 {
-    CHASSIS_ZERO_FORCE = 0,    // 电流零输入
-    CHASSIS_ROTATE,            // 小陀螺模式
-    CHASSIS_NO_FOLLOW,         // 不跟随，允许全向平移
-    CHASSIS_FOLLOW_GIMBAL_YAW, // 跟随模式，底盘叠加角度环控制
-    CHASSIS_FOLDED_ROTATE,     // 云台折叠状态下的跟随模式
+    CHASSIS_ZERO_FORCE = 0,         // 电流零输入
+    CHASSIS_ROTATE,                 // 小陀螺模式
+    CHASSIS_NO_FOLLOW,              // 不跟随，允许全向平移
+    CHASSIS_FOLLOW_GIMBAL_YAW,      // 跟随模式，底盘叠加角度环控制
+    CHASSIS_FOLDED_ROTATE = 4,     // 折叠态：左横杆控制底盘旋转，Yaw 零力矩
 } chassis_mode_e;
 
 // 云台模式设置
 typedef enum
 {
-    GIMBAL_ZERO_FORCE = 0, // 电流零输入
-    GIMBAL_IMU_MODE,      // 云台陀螺仪反馈模式,反馈值为陀螺仪pitch,total_yaw_angle,底盘可以为小陀螺和跟随模式
+    GIMBAL_ZERO_FORCE = 0,          // 电流零输入
+    GIMBAL_IMU_MODE,                // Yaw/上 Pitch 使用 IMU 反馈，下 Pitch 使用电机反馈
 } gimbal_mode_e;
 
 // 云台折叠状态机
 typedef enum
 {
-    GIMBAL_FOLDED = 0,      // 折叠状态
-    GIMBAL_FOLDING,         // 折叠过程状态
-    GIMBAL_UNFOLDING,       // 展开过程状态
-    GIMBAL_DEPLOYED,        // 部署状态
+    GIMBAL_FOLDED = 0,              // 折叠状态
+    GIMBAL_FOLDING,                 // 折叠过程状态
+    GIMBAL_UNFOLDING,               // 展开过程状态
+    GIMBAL_DEPLOYED,                // 部署状态
 } gimbal_fold_state_e;
 
 // 云台折叠请求状态机
 typedef enum
 {
-    GIMBAL_REQUEST_FOLD = 0, // 请求折叠
-    GIMBAL_REQUEST_DEPLOY,   // 请求展开
+    GIMBAL_REQUEST_FOLD = 0,        // 请求折叠
+    GIMBAL_REQUEST_DEPLOY,          // 请求展开
 } gimbal_request_mode_e;
 
 // 云台折叠步骤状态机
 typedef enum
 {
-    FOLD_STEP_LEVEL_UPPER_PITCH,
-    FOLD_STEP_CENTER_YAW,
-    FOLD_STEP_MOVE_LOWER_PITCH,
-    FOLD_STEP_FINISH,
+    FOLD_STEP_LEVEL_UPPER_PITCH,    // 上pitch水平
+    FOLD_STEP_CENTER_YAW,           // Yaw 回到机械中位
+    FOLD_STEP_MOVE_LOWER_PITCH,     // 下pitch就位
+    FOLD_STEP_FINISH,               // 折叠完成
 } fold_step_e;
 
 typedef enum
 {
-    LOWER_PITCH_FOLD,
-    LOWER_PITCH_DEPLOY,
-    YAW_FOLD,
-    UPPER_PITCH_FOLD,
+    LOWER_PITCH_FOLD,               // 下pitch折叠到位
+    LOWER_PITCH_DEPLOY,             // 下pitch部署到位
+    YAW_FOLD,                       // Yaw 机械回中到位
+    UPPER_PITCH_FOLD,               // 上pitch折叠到位
 } gimbal_reach_target_type_e;
 
 // 发射模式设置
@@ -141,8 +147,8 @@ typedef enum
 } shoot_mode_e;
 typedef enum
 {
-    FRICTION_OFF = 0, // 摩擦轮关闭
-    FRICTION_ON,      // 摩擦轮开启
+    FRICTION_OFF = 0,               // 摩擦轮关闭
+    FRICTION_ON,                    // 摩擦轮开启
 } friction_mode_e;
 
 typedef enum
@@ -175,9 +181,9 @@ typedef struct
 typedef struct
 {
     // 控制部分
-    float vx;           // 前进方向速度
-    float vy;           // 横移方向速度
-    float wz;           // 旋转速度
+    float vx;           // 云台系前进速度，mm/s
+    float vy;           // 云台系向右速度，mm/s
+    float wz;           // 逆时针角速度，degree/s；由底盘模式生成
     float offset_angle; // 底盘和归中位置的夹角
     chassis_mode_e chassis_mode;
     int chassis_speed_buff;
@@ -189,8 +195,8 @@ typedef struct
 // cmd发布的云台控制数据,由gimbal订阅
 typedef struct
 { // 云台角度控制
-    float yaw;
-    float pitch;
+    float yaw; // IMU 连续 Yaw 目标，degree
+    float pitch; // IMU Pitch 目标，degree
     float chassis_rotate_wz;
 
     gimbal_mode_e gimbal_mode;
@@ -218,31 +224,40 @@ typedef struct
 typedef struct
 {
 #if defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD) // 非单板的时候底盘还将imu数据回传(若有必要)
-    // attitude_t chassis_imu_data;
+    attitude_t chassis_imu_data;
 #endif
-    // 后续增加底盘的真实速度
-    // float real_vx;
-    // float real_vy;
-    // float real_wz;
-
     uint8_t rest_heat;           // 剩余枪口热量
     Bullet_Speed_e bullet_speed; // 弹速限制
     Enemy_Color_e enemy_color;   // 0 for blue, 1 for red
-
+    App_Fault_s fault;           // 本应用通信、电机、IMU、控制输入的分类故障状态
+    float real_vx;              // 底盘几何中心前进速度，mm/s
+    float real_vy;              // 底盘几何中心向右速度，mm/s
+    float real_wz;              // 底盘逆时针角速度，degree/s
 } Chassis_Upload_Data_s;
 
+
+typedef enum
+{
+    GIMBAL_ACTION_FAULT_NONE = 0,
+    GIMBAL_ACTION_FAULT_TIMEOUT = 1U << 0,
+    GIMBAL_ACTION_FAULT_FEEDBACK_LOST = 1U << 1,
+} Gimbal_Action_Fault_e;
 
 typedef struct
 {
     attitude_t gimbal_imu_data;
-    uint16_t yaw_motor_single_round_angle;
+    float yaw_motor_single_round_angle; // 本地反馈，degree，保留达妙角度小数
+    float yaw_motor_position_rad; // 本地电机位置反馈，rad
 
     gimbal_fold_state_e fold_state;
+    uint8_t feedback_valid; // 三电机与 IMU 均有有效且新鲜的反馈
+    App_Fault_s fault;
+    uint8_t action_fault_flags; // 机构动作故障锁存，收到有效零力矩命令后确认清除
 } Gimbal_Upload_Data_s;
 
 typedef struct
 {
-    uint8_t reserved;
+    App_Fault_s fault;
     // code to go here
     // ...
 } Shoot_Upload_Data_s;

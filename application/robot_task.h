@@ -35,9 +35,12 @@ void StartUITASK(void const *argument);
  */
 void OSTaskInit()
 {
-    osThreadDef(instask, StartINSTASK, osPriorityAboveNormal, 0, 1024);
-    insTaskHandle = osThreadCreate(osThread(instask), NULL); // 由于是阻塞读取传感器,为姿态解算设置较高优先级,确保以1khz的频率执行
-    // // 后续修改为读取传感器数据准备好的中断处理,
+#if defined(ONE_BOARD) || defined(GIMBAL_BOARD) || defined(CHASSIS_BOARD)
+    osThreadDef(instask, StartINSTASK, osPriorityNormal, 0, 512);
+    insTaskHandle = osThreadCreate(osThread(instask), NULL);
+#else
+    insTaskHandle = NULL;
+#endif
 
     osThreadDef(motortask, StartMOTORTASK, osPriorityNormal, 0, 256);
     motorTaskHandle = osThreadCreate(osThread(motortask), NULL);
@@ -48,8 +51,12 @@ void OSTaskInit()
     osThreadDef(robottask, StartROBOTTASK, osPriorityNormal, 0, 1024);
     robotTaskHandle = osThreadCreate(osThread(robottask), NULL);
 
+#if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
     osThreadDef(uitask, StartUITASK, osPriorityNormal, 0, 512);
     uiTaskHandle = osThreadCreate(osThread(uitask), NULL);
+#else
+    uiTaskHandle = NULL;
+#endif
 
     HTMotorControlInit(); // 没有注册HT电机则不会执行
 }
@@ -58,7 +65,10 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
 {
     static float ins_start;
     static float ins_dt;
-    INS_Init(); // 确保BMI088被正确初始化.
+    // 初始化和校准期间允许同优先级控制任务运行并反馈 IMU 故障。
+    osThreadSetPriority(osThreadGetId(), osPriorityNormal);
+    INS_Init();
+    osThreadSetPriority(osThreadGetId(), osPriorityAboveNormal);
     LOGINFO("[freeRTOS] INS Task Start");
     for (;;)
     {
@@ -68,7 +78,6 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
         ins_dt = DWT_GetTimeline_ms() - ins_start;
         if (ins_dt > 1)
             LOGERROR("[freeRTOS] INS Task is being DELAY! dt = [%f]", &ins_dt);
-        VisionSend(); // 解算完成后发送视觉数据,但是当前的实现不太优雅,后续若添加硬件触发需要重新考虑结构的组织
         osDelay(1);
     }
 }
@@ -104,7 +113,7 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
         daemon_dt = DWT_GetTimeline_ms() - daemon_start;
         if (daemon_dt > 10)
             LOGERROR("[freeRTOS] Daemon Task is being DELAY! dt = [%f]", &daemon_dt);
-        osDelay(10);
+        osDelay(DAEMON_TASK_PERIOD_MS);
     }
 }
 
