@@ -18,12 +18,17 @@
 #include "tim.h"
 #include "user_lib.h"
 #include "general_def.h"
-#include "master_process.h"
 #include "arm_math.h"
+#include "daemon.h"
 
 static INS_t INS;
+static DaemonInstance *ins_feedback_daemon;
+
+uint8_t INS_IsFeedbackValid(void)
+{
+    return BMI088_IsReadValid() && DaemonIsOnline(ins_feedback_daemon);
+}
 static IMU_Param_t IMU_Param;
-static PIDInstance TempCtrl = {0};
 
 const float xb[3] = {1, 0, 0};
 const float yb[3] = {0, 1, 0};
@@ -32,23 +37,19 @@ const float zb[3] = {0, 0, 1};
 // 用于获取两次采样之间的时间间隔
 static uint32_t INS_DWT_Count = 0;
 static float dt = 0, t = 0;
-static float RefTemp = 40; // 恒温设定温度
 
 static void IMU_Param_Correction(IMU_Param_t *param, float gyro[3], float accel[3]);
+
+// 传感器 X 向左、Y 向枪口、Z 向下；云台 INS 坐标保留 X，Y 反向且 Z 向上。
+static void IMUMapToGimbalFrame(float vector[3])
+{
+    vector[Y] = -vector[Y];
+    vector[Z] = -vector[Z];
+}
 
 static void IMUPWMSet(uint16_t pwm)
 {
     __HAL_TIM_SetCompare(&htim3, TIM_CHANNEL_4, pwm);
-}
-
-/**
- * @brief 温度控制
- *
- */
-static void IMU_Temperature_Ctrl(void)
-{
-    PIDCalculate(&TempCtrl, BMI088.Temperature, RefTemp);
-    IMUPWMSet(float_constrain(float_rounding(TempCtrl.Output), 0, UINT32_MAX));
 }
 
 // 使用加速度计的数据初始化Roll和Pitch,而Yaw置0,这样可以避免在初始时候的姿态估计误差
@@ -68,6 +69,7 @@ static void InitQuaternion(float *init_q4)
     }
     for (uint8_t i = 0; i < 3; ++i)
         acc_init[i] /= 100;
+    IMUMapToGimbalFrame(acc_init);
     Norm3d(acc_init);
     // 计算原始加速度矢量和导航系重力加速度矢量的夹角
     float angle = acosf(Dot3d(acc_init, gravity_norm));
@@ -78,17 +80,28 @@ static void InitQuaternion(float *init_q4)
         init_q4[i + 1] = axis_rot[i] * sinf(angle / 2.0f); // 轴角公式,第三轴为0(没有z轴分量)
 }
 
+attitude_t *INS_GetData(void)
+{
+    return (attitude_t *)&INS.Gyro;
+}
+
 attitude_t *INS_Init(void)
 {
     if (!INS.init)
         INS.init = 1;
     else
-        return (attitude_t *)&INS.Gyro;
+        return INS_GetData();
 
-    HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
+    IMUPWMSet(0);
+    HAL_TIM_PWM_Stop(&htim3, TIM_CHANNEL_4);
 
     while (BMI088Init(&hspi2, 1) != BMI088_NO_ERROR)
         ;
+    Daemon_Init_Config_s daemon_config = {
+        .reload_count = DAEMON_COUNT_FROM_MS(INS_FEEDBACK_TIMEOUT_MS),
+        .require_first_reload = 1,
+    };
+    ins_feedback_daemon = DaemonRegister(&daemon_config);
     IMU_Param.scale[X] = 1;
     IMU_Param.scale[Y] = 1;
     IMU_Param.scale[Z] = 1;
@@ -96,24 +109,13 @@ attitude_t *INS_Init(void)
     IMU_Param.Pitch = 0;
     IMU_Param.Roll = 0;
     IMU_Param.flag = 1;
-
     float init_quaternion[4] = {0};
     InitQuaternion(init_quaternion);
     IMU_QuaternionEKF_Init(init_quaternion, 10, 0.001, 1000000, 1, 0);
-    // imu heat init
-    PID_Init_Config_s config = {.MaxOut = 800,
-                                .IntegralLimit = 80,
-                                .DeadBand = 0,
-                                .Kp = 400,
-                                .Ki = 5,
-                                .Kd = 0,
-                                .Improve = 0x01}; // enable integratiaon limit
-    PIDInit(&TempCtrl, &config);
-
     // noise of accel is relatively big and of high freq,thus lpf is used
     INS.AccelLPF = 0.0085;
     DWT_GetDeltaT(&INS_DWT_Count);
-    return (attitude_t *)&INS.Gyro; // @todo: 这里偷懒了,不要这样做! 修改INT_t结构体可能会导致异常,待修复.
+    return INS_GetData();
 }
 
 /* 注意以1kHz的频率运行此任务 */
@@ -129,6 +131,10 @@ void INS_Task(void)
     if ((count % 1) == 0)
     {
         BMI088_Read(&BMI088);
+        if (!BMI088_IsReadValid())
+        {
+            return;
+        }
 
         INS.Accel[X] = BMI088.Accel[X];
         INS.Accel[Y] = BMI088.Accel[Y];
@@ -136,6 +142,8 @@ void INS_Task(void)
         INS.Gyro[X] = BMI088.Gyro[X];
         INS.Gyro[Y] = BMI088.Gyro[Y];
         INS.Gyro[Z] = BMI088.Gyro[Z];
+        IMUMapToGimbalFrame(INS.Accel);
+        IMUMapToGimbalFrame(INS.Gyro);
 
         // demo function,用于修正安装误差,可以不管,本demo暂时没用
         IMU_Param_Correction(&IMU_Param, INS.Gyro, INS.Accel);
@@ -167,15 +175,7 @@ void INS_Task(void)
         INS.Pitch = QEKF_INS.Pitch;
         INS.Roll = QEKF_INS.Roll;
         INS.YawTotalAngle = QEKF_INS.YawTotalAngle;
-
-        VisionSetAltitude(INS.Yaw, INS.Pitch, INS.Roll);
-    }
-
-    // temperature control
-    if ((count % 2) == 0)
-    {
-        // 500hz
-        IMU_Temperature_Ctrl();
+        DaemonReload(ins_feedback_daemon);
     }
 
     if ((count++ % 1000) == 0)

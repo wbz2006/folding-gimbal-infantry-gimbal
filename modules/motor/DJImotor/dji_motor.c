@@ -155,13 +155,15 @@ static void MotorSenderGrouping(DJIMotorInstance *motor, CAN_Init_Config_s *conf
  */
 static void DecodeDJIMotor(CANInstance *_instance)
 {
+    if (_instance->rx_len != 8 ||
+        (((uint16_t)_instance->rx_buff[0] << 8) | _instance->rx_buff[1]) > 8191)
+        return;
     // 这里对can instance的id进行了强制转换,从而获得电机的instance实例地址
     // _instance指针指向的id是对应电机instance的地址,通过强制转换为电机instance的指针,再通过->运算符访问电机的成员motor_measure,最后取地址获得指针
     uint8_t *rxbuff = _instance->rx_buff;
     DJIMotorInstance *motor = (DJIMotorInstance *)_instance->id;
     DJI_Motor_Measure_s *measure = &motor->measure; // measure要多次使用,保存指针减小访存开销
 
-    DaemonReload(motor->daemon);
     motor->dt = DWT_GetDeltaT(&motor->feed_cnt);
 
     // 解析数据并对电流和速度进行滤波,电机的反馈报文具体格式见电机说明手册
@@ -180,6 +182,7 @@ static void DecodeDJIMotor(CANInstance *_instance)
     else if (measure->ecd - measure->last_ecd < -4096)
         measure->total_round++;
     measure->total_angle = measure->total_round * 360 + measure->angle_single_round;
+    DaemonReload(motor->daemon);
 }
 
 static void DJIMotorLostCallback(void *motor_ptr)
@@ -222,12 +225,28 @@ DJIMotorInstance *DJIMotorInit(Motor_Init_Config_s *config)
         .callback = DJIMotorLostCallback,
         .owner_id = instance,
         .reload_count = 2, // 20ms未收到数据则丢失
+        .require_first_reload = 1,
     };
     instance->daemon = DaemonRegister(&daemon_config);
 
     DJIMotorEnable(instance);
     dji_motor_instance[idx++] = instance;
     return instance;
+}
+
+/**
+ * @brief 清除DJI电机各PID环的运行状态，保留PID控制参数。
+ *
+ * @param motor 电机实例
+ */
+void DJIMotorResetPIDState(DJIMotorInstance *motor)
+{
+    if (motor == NULL)
+        return;
+
+    PIDResetState(&motor->motor_controller.angle_PID);
+    PIDResetState(&motor->motor_controller.speed_PID);
+    PIDResetState(&motor->motor_controller.current_PID);
 }
 
 /* 电流只能通过电机自带传感器监测,后续考虑加入力矩传感器应变片等 */
@@ -248,6 +267,8 @@ void DJIMotorStop(DJIMotorInstance *motor)
 
 void DJIMotorEnable(DJIMotorInstance *motor)
 {
+    if (motor->stop_flag == MOTOR_STOP)
+        DJIMotorResetPIDState(motor);
     motor->stop_flag = MOTOR_ENALBED;
 }
 
@@ -279,6 +300,13 @@ void DJIMotorControl()
     for (size_t i = 0; i < idx; ++i)
     { // 减小访存开销,先保存指针引用
         motor = dji_motor_instance[i];
+        group = motor->sender_group;
+        num = motor->message_num;
+        if (motor->stop_flag == MOTOR_STOP)
+        {
+            memset(sender_assignment[group].tx_buff + 2 * num, 0, sizeof(uint16_t));
+            continue;
+        }
         motor_setting = &motor->motor_settings;
         motor_controller = &motor->motor_controller;
         measure = &motor->measure;
@@ -327,14 +355,9 @@ void DJIMotorControl()
         set = (int16_t)pid_ref;
 
         // 分组填入发送数据
-        group = motor->sender_group;
-        num = motor->message_num;
         sender_assignment[group].tx_buff[2 * num] = (uint8_t)(set >> 8);         // 低八位
         sender_assignment[group].tx_buff[2 * num + 1] = (uint8_t)(set & 0x00ff); // 高八位
 
-        // 若该电机处于停止状态,直接将buff置零
-        if (motor->stop_flag == MOTOR_STOP)
-            memset(sender_assignment[group].tx_buff + 2 * num, 0, sizeof(uint16_t));
     }
 
     // 遍历flag,检查是否要发送这一帧报文

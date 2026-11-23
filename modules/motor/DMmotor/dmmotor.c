@@ -19,6 +19,11 @@
 static uint8_t idx;
 static DMMotorInstance *dm_motor_instance[DM_MOTOR_CNT];
 
+static float DMMotorGetTorqueLimit(const DMMotorInstance *motor)
+{
+    return motor->motor_type == DM4310 ? DM4310_T_MAX : DM_T_MAX;
+}
+
 /**
  * @brief 将浮点物理量映射为无符号整数编码。
  *
@@ -71,6 +76,8 @@ static float uint_to_float(
  */
 static void DMMotorSetMode(DMMotor_Mode_e cmd, DMMotorInstance *motor)
 {
+    if (motor == NULL || motor->motor_can_instace == NULL)
+        return;
     memset(motor->motor_can_instace->tx_buff, 0xff, 7);
     motor->motor_can_instace->tx_buff[7] = (uint8_t)cmd;
     CANTransmit(motor->motor_can_instace, 1);
@@ -85,13 +92,15 @@ static void DMMotorSetMode(DMMotor_Mode_e cmd, DMMotorInstance *motor)
  */
 static void DMMotorDecode(CANInstance *motor_can)
 {
+    if (motor_can == NULL || motor_can->id == NULL || motor_can->rx_len < 8)
+        return;
     uint16_t tmp;
     uint8_t *rxbuff = motor_can->rx_buff;
     DMMotorInstance *motor = (DMMotorInstance *)motor_can->id;
     DM_Motor_Measure_s *measure = &motor->measure;
 
-    DaemonReload(motor->motor_daemon);
-
+    measure->id = rxbuff[0] & 0x0f;
+    measure->state = rxbuff[0] >> 4;
     measure->last_position = measure->position;
 
     tmp = (uint16_t)((rxbuff[1] << 8) | rxbuff[2]);
@@ -117,10 +126,27 @@ static void DMMotorDecode(CANInstance *motor_can)
     measure->velocity = uint_to_float(tmp, DM_V_MIN, DM_V_MAX, 12);
 
     tmp = (uint16_t)(((rxbuff[4] & 0x0f) << 8) | rxbuff[5]);
-    measure->torque = uint_to_float(tmp, DM_T_MIN, DM_T_MAX, 12);
+    const float torque_limit = DMMotorGetTorqueLimit(motor);
+    measure->torque = uint_to_float(tmp, -torque_limit, torque_limit, 12);
 
     measure->T_Mos = (float)rxbuff[6];
     measure->T_Rotor = (float)rxbuff[7];
+    const CANBusStatus *bus = CANGetBusStatus(motor_can);
+    motor->feedback_bus_off_count = bus != NULL ? bus->bus_off_count : 0;
+    DaemonReload(motor->motor_daemon);
+}
+
+uint8_t DMMotorIsFeedbackValid(DMMotorInstance *motor)
+{
+    if (motor == NULL || motor->motor_can_instace == NULL ||
+        !CANIsReady(motor->motor_can_instace) ||
+        !DaemonIsOnline(motor->motor_daemon))
+        return 0;
+    const CANBusStatus *bus = CANGetBusStatus(motor->motor_can_instace);
+    return bus != NULL && motor->feedback_bus_off_count == bus->bus_off_count &&
+           motor->measure.state == 1 && // DM 状态 1：使能；0 失能，8..E 为错误
+           isfinite(motor->measure.position) && isfinite(motor->measure.velocity) &&
+           isfinite(motor->measure.angle_single_round);
 }
 
 /**
@@ -133,6 +159,8 @@ static void DMMotorDecode(CANInstance *motor_can)
 static void DMMotorLostCallback(void *motor_ptr)
 {
     DMMotorInstance *motor = (DMMotorInstance *)motor_ptr;
+    if (motor == NULL)
+        return;
     motor->pid_ref = 0.0f;
     motor->stop_flag = MOTOR_STOP;
 }
@@ -264,6 +292,8 @@ static void DMMotorSendMIT(
     float kd,
     float torque_des)
 {
+    if (motor == NULL || motor->motor_can_instace == NULL)
+        return;
     if (motor->stop_flag == MOTOR_STOP)
     {
         position_des = 0.0f;
@@ -273,18 +303,19 @@ static void DMMotorSendMIT(
         torque_des = 0.0f;
     }
 
+    const float torque_limit = DMMotorGetTorqueLimit(motor);
     LIMIT_MIN_MAX(position_des, DM_P_MIN, DM_P_MAX);
     LIMIT_MIN_MAX(velocity_des, DM_V_MIN, DM_V_MAX);
     LIMIT_MIN_MAX(kp, DM_KP_MIN, DM_KP_MAX);
     LIMIT_MIN_MAX(kd, DM_KD_MIN, DM_KD_MAX);
-    LIMIT_MIN_MAX(torque_des, DM_T_MIN, DM_T_MAX);
+    LIMIT_MIN_MAX(torque_des, -torque_limit, torque_limit);
 
     motor->motor_send_mailbox.position_des =
         float_to_uint(position_des, DM_P_MIN, DM_P_MAX, 16);
     motor->motor_send_mailbox.velocity_des =
         float_to_uint(velocity_des, DM_V_MIN, DM_V_MAX, 12);
     motor->motor_send_mailbox.torque_des =
-        float_to_uint(torque_des, DM_T_MIN, DM_T_MAX, 12);
+        float_to_uint(torque_des, -torque_limit, torque_limit, 12);
     motor->motor_send_mailbox.Kp =
         float_to_uint(kp, DM_KP_MIN, DM_KP_MAX, 12);
     motor->motor_send_mailbox.Kd =
@@ -341,6 +372,7 @@ DMMotorInstance *DMMotorInit(Motor_Init_Config_s *config)
 
     memset(motor, 0, sizeof(DMMotorInstance));
 
+    motor->motor_type = config->motor_type;
     motor->motor_settings = config->controller_setting_init_config;
     PIDInit(&motor->current_PID,
             &config->controller_param_init_config.current_PID);
@@ -363,22 +395,46 @@ DMMotorInstance *DMMotorInit(Motor_Init_Config_s *config)
     config->can_init_config.can_module_callback = DMMotorDecode;
     config->can_init_config.id = motor;
     motor->motor_can_instace = CANRegister(&config->can_init_config);
+    if (motor->motor_can_instace == NULL)
+    {
+        free(motor);
+        return NULL;
+    }
 
     Daemon_Init_Config_s daemon_config = {
         .callback = DMMotorLostCallback,
         .owner_id = motor,
         .reload_count = 10,
+        .require_first_reload = 1,
     };
     motor->motor_daemon = DaemonRegister(&daemon_config);
+    if (motor->motor_daemon == NULL)
+    {
+        DMMotorStop(motor);
+    }
 
     DMMotorEnable(motor);
     DMMotorSetMode(DM_CMD_MOTOR_MODE, motor);
     DWT_Delay(0.1);
-    DMMotorCaliEncoder(motor);
     DWT_Delay(0.1);
 
     dm_motor_instance[idx++] = motor;
     return motor;
+}
+
+/**
+ * @brief 清除达妙电机各PID环的运行状态，保留PID控制参数。
+ *
+ * @param motor 电机实例。
+ */
+void DMMotorResetPIDState(DMMotorInstance *motor)
+{
+    if (motor == NULL)
+        return;
+
+    PIDResetState(&motor->angle_PID);
+    PIDResetState(&motor->speed_PID);
+    PIDResetState(&motor->current_PID);
 }
 
 /**
@@ -389,6 +445,8 @@ DMMotorInstance *DMMotorInit(Motor_Init_Config_s *config)
  */
 void DMMotorSetRef(DMMotorInstance *motor, float ref)
 {
+    if (motor == NULL)
+        return;
     motor->pid_ref = ref;
 }
 
@@ -399,7 +457,15 @@ void DMMotorSetRef(DMMotorInstance *motor, float ref)
  */
 void DMMotorEnable(DMMotorInstance *motor)
 {
+    if (motor == NULL)
+        return;
     motor->stop_flag = MOTOR_ENALBED;
+}
+
+void DMMotorRequestEnable(DMMotorInstance *motor)
+{
+    DMMotorSendMIT(motor, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+    DMMotorSetMode(DM_CMD_MOTOR_MODE, motor);
 }
 
 /**
@@ -411,6 +477,8 @@ void DMMotorEnable(DMMotorInstance *motor)
  */
 void DMMotorStop(DMMotorInstance *motor)
 {
+    if (motor == NULL)
+        return;
     motor->stop_flag = MOTOR_STOP;
 }
 
@@ -535,6 +603,11 @@ void DMMotorSetMITRef(
  */
 static void DMMotorControlOne(DMMotorInstance *motor)
 {
+    if (motor->stop_flag == MOTOR_STOP)
+    {
+        DMMotorSendMIT(motor, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+        return; // 停机期间不积累 PID 历史
+    }
     switch (motor->control_mode)
     {
         case DMMOTOR_CONTROL_EXTERNAL_IMPEDANCE:

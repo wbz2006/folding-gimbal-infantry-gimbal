@@ -35,6 +35,8 @@
 #define DM_T_MIN (-12.5f)
 /** @brief MIT 力矩映射上限，单位 N*m。 */
 #define DM_T_MAX (12.5f)
+/** @brief DM-J4310-2EC 峰值输出扭矩，映射范围需与达妙调试助手 T_MAX 一致。 */
+#define DM4310_T_MAX (7.0f)
 /** @brief MIT 位置刚度映射下限。 */
 #define DM_KP_MIN (0.0f)
 /** @brief MIT 位置刚度映射上限。 */
@@ -116,6 +118,7 @@ typedef struct
 
     DMMotor_MIT_Config_s mit_config;            /**< MIT 控制参数配置。 */
     DMMotor_Send_s motor_send_mailbox;          /**< MIT 报文编码缓存。 */
+    Motor_Type_e motor_type;                     /**< 电机型号，用于选择型号对应的MIT映射参数。 */
     /**
      * @brief 当前周期控制模式。
      *
@@ -127,6 +130,7 @@ typedef struct
     Motor_Working_Type_e stop_flag;             /**< 电机启停状态。 */
     CANInstance *motor_can_instace;             /**< 绑定的 CAN 实例。 */
     DaemonInstance *motor_daemon;               /**< 反馈离线监测实例。 */
+    volatile uint32_t feedback_bus_off_count;
     uint32_t lost_cnt;                          /**< 预留离线计数。 */
 } DMMotorInstance;
 
@@ -150,6 +154,13 @@ typedef enum
 DMMotorInstance *DMMotorInit(Motor_Init_Config_s *config);
 
 /**
+ * @brief 清除达妙电机各PID环的运行状态，保留PID控制参数。
+ *
+ * @param motor 电机实例。
+ */
+void DMMotorResetPIDState(DMMotorInstance *motor);
+
+/**
  * @brief 设置外部多环 PID 的参考输入。
  *
  * @param motor 电机实例。
@@ -171,6 +182,14 @@ void DMMotorOuterLoop(DMMotorInstance *motor, Closeloop_Type_e close_loop_type);
  * @param motor 电机实例。
  */
 void DMMotorEnable(DMMotorInstance *motor);
+
+/**
+ * @brief 向达妙电机发送一次 CAN 模式使能命令。
+ * @note 先发送零力矩控制帧，避免恢复时沿用电机缓存的旧控制量；不更改软件启停标志。
+ *
+ * @param motor 电机实例。
+ */
+void DMMotorRequestEnable(DMMotorInstance *motor);
 
 /**
  * @brief 停止电机周期控制输出。
@@ -261,5 +280,7 @@ void DMMotorControl(void);
  *       使用统一的 DMMotorControl() 时不要再调用该接口，否则 MIT 电机会重复发送。
  */
 void DMMotorMITControl(void);
+
+uint8_t DMMotorIsFeedbackValid(DMMotorInstance *motor);
 
 #endif /* DMMOTOR_H */

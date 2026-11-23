@@ -14,6 +14,31 @@
 
 #include "controller.h"
 #include "stdint.h"
+#include "bsp_can.h"
+#include "daemon.h"
+
+/**
+ * @brief 通用 CAN 电机在线查询，不依赖厂家、型号或电机结构体布局。
+ * @param daemon 电机接收反馈时刷新的 daemon；注册时应设置 require_first_reload = 1。
+ * @param can 电机绑定的 CAN 实例。
+ * @return uint8_t 已收到反馈、未超过该电机的超时窗口且 CAN 就绪时返回 1，否则返回 0。
+ * @note 任一参数为 NULL 时返回 0。启停状态不参与判断；在线不表示无过温、堵转等故障。
+ */
+static inline uint8_t MotorIsOnline(DaemonInstance *daemon, const CANInstance *can)
+{
+    return DaemonIsOnline(daemon) && CANIsReady(can);
+}
+
+/**
+ * @brief 通用 CAN 电机离线查询，为 MotorIsOnline 的逻辑取反。
+ * @param daemon 电机反馈 daemon。
+ * @param can 电机绑定的 CAN 实例。
+ * @return uint8_t 未收到反馈、反馈超时或 CAN 未就绪时返回 1，否则返回 0；NULL 视为离线。
+ */
+static inline uint8_t MotorIsOffline(DaemonInstance *daemon, const CANInstance *can)
+{
+    return !MotorIsOnline(daemon, can);
+}
 
 #define LIMIT_MIN_MAX(x, min, max) (x) = (((x) <= (min)) ? (min) : (((x) >= (max)) ? (max) : (x)))
 

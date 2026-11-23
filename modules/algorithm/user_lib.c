@@ -148,7 +148,12 @@ float loop_float_constrain(float Input, float minValue, float maxValue)
 // 角度格式化为-180~180
 float theta_format(float Ang)
 {
-    return loop_float_constrain(Ang, -180.0f, 180.0f);
+    Ang = fmodf(Ang, 360.0f);
+    if (Ang > 180.0f)
+        Ang -= 360.0f;
+    else if (Ang < -180.0f)
+        Ang += 360.0f;
+    return Ang;
 }
 
 int float_rounding(float raw)

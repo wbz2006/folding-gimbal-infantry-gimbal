@@ -3,6 +3,7 @@
 #include "stdlib.h"
 #include "memory.h"
 #include "buzzer.h"
+#include "bsp_can.h"
 
 // 用于保存所有的daemon instance
 static DaemonInstance *daemon_instances[DAEMON_MX_CNT] = {NULL};
@@ -10,15 +11,19 @@ static uint8_t idx; // 用于记录当前的daemon instance数量,配合回调�
 
 DaemonInstance *DaemonRegister(Daemon_Init_Config_s *config)
 {
+    if (config == NULL || idx >= DAEMON_MX_CNT)
+        return NULL;
     DaemonInstance *instance = (DaemonInstance *)malloc(sizeof(DaemonInstance));
+    if (instance == NULL)
+        return NULL;
     memset(instance, 0, sizeof(DaemonInstance));
 
     instance->owner_id = config->owner_id;
     instance->reload_count = config->reload_count == 0 ? 100 : config->reload_count; // 默认值为100
     instance->callback = config->callback;
-    instance->temp_count = config->init_count == 0 ? 100 : config->init_count; // 默认值为100,初始计数
-
-    instance->temp_count = config->reload_count;
+    instance->temp_count = config->init_count == 0 ? instance->reload_count : config->init_count;
+    instance->has_reloaded = !config->require_first_reload;
+    instance->offline_reported = config->require_first_reload != 0;
     daemon_instances[idx++] = instance;
     return instance;
 }
@@ -26,28 +31,98 @@ DaemonInstance *DaemonRegister(Daemon_Init_Config_s *config)
 /* "喂狗"函数 */
 void DaemonReload(DaemonInstance *instance)
 {
+    if (instance == NULL)
+        return;
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
     instance->temp_count = instance->reload_count;
+    instance->has_reloaded = 1;
+    instance->offline_reported = 0;
+    __set_PRIMASK(primask);
 }
 
 uint8_t DaemonIsOnline(DaemonInstance *instance)
 {
-    return instance->temp_count > 0;
+    return instance != NULL && instance->has_reloaded && instance->temp_count > 0;
+}
+
+uint8_t DaemonHasReloaded(DaemonInstance *instance)
+{
+    return instance != NULL && instance->has_reloaded;
+}
+
+void DaemonSetFeedbackValid(DaemonInstance *instance, uint8_t valid)
+{
+    if (instance != NULL)
+        instance->feedback_valid = valid != 0;
+}
+
+uint8_t DaemonIsFeedbackValid(DaemonInstance *instance)
+{
+    return instance != NULL && instance->feedback_valid;
+}
+
+void DaemonSetFaultFlags(DaemonInstance *instance, uint32_t fault_flags)
+{
+    if (instance != NULL)
+        instance->fault_flags = fault_flags;
+}
+
+void DaemonAddFaultFlags(DaemonInstance *instance, uint32_t fault_flags)
+{
+    if (instance != NULL)
+        instance->fault_flags |= fault_flags;
+}
+
+void DaemonClearFaultFlags(DaemonInstance *instance, uint32_t fault_flags)
+{
+    if (instance != NULL)
+        instance->fault_flags &= ~fault_flags;
+}
+
+uint32_t DaemonGetFaultFlags(DaemonInstance *instance)
+{
+    return instance != NULL ? instance->fault_flags : UINT32_MAX;
+}
+
+uint32_t AppFaultUpdate(DaemonInstance *daemon, const App_Fault_s *fault)
+{
+    const uint32_t fault_flags = (uint32_t)fault->motor_offline_flags |
+        ((uint32_t)fault->comm_fault_flags << 8) |
+        ((uint32_t)fault->imu_fault_flags << 16) |
+        ((uint32_t)fault->control_fault_flags << 24);
+
+    DaemonSetFeedbackValid(daemon,
+        fault->motor_offline_flags == MOTOR_OFFLINE_NONE &&
+        fault->imu_fault_flags == APP_IMU_FAULT_NONE &&
+        (fault->comm_fault_flags & APP_COMM_FAULT_FEEDBACK_OFFLINE) == 0);
+    DaemonSetFaultFlags(daemon, fault_flags);
+    return fault_flags;
 }
 
 void DaemonTask()
 {
+    CANServiceTask(); // 在现有10ms任务中维护CAN，各应用无需额外调用
     DaemonInstance *dins; // 提高可读性同时降低访存开销
     for (size_t i = 0; i < idx; ++i)
     {
 
         dins = daemon_instances[i];
+        offline_callback callback = NULL;
+        uint32_t primask = __get_PRIMASK();
+        __disable_irq();
         if (dins->temp_count > 0) // 如果计数器还有值,说明上一次喂狗后还没有超时,则计数器减一
             dins->temp_count--;
-        else if (dins->callback) // 等于零说明超时了,调用回调函数(如果有的话)
+        else if (dins->has_reloaded && dins->callback && !dins->offline_reported) // 首次数据后只在离线边沿通知一次
         {
-            dins->callback(dins->owner_id); // module内可以将owner_id强制类型转换成自身类型从而调用特定module的offline callback
+            dins->offline_reported = 1;
+            callback = dins->callback;
             // @todo 为蜂鸣器/led等增加离线报警的功能,非常关键!
         }
+        __set_PRIMASK(primask);
+        // 回调可能较慢；在临界区外执行。模块应防止迟到回调清掉已恢复数据。
+        if (callback != NULL)
+            callback(dins->owner_id);
     }
 }
 // (需要id的原因是什么?) 下面是copilot的回答!

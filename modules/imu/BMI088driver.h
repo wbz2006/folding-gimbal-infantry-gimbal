@@ -95,6 +95,7 @@ enum
 
     BMI088_SELF_TEST_ACCEL_ERROR = 0x80,
     BMI088_SELF_TEST_GYRO_ERROR = 0x40,
+    BMI088_CALI_TIMEOUT = 0x10,
     BMI088_NO_SENSOR = 0xFF,
 };
 
@@ -129,5 +130,6 @@ extern uint8_t bmi088_gyro_init(void);
  * @param bmi088 传入BMI088实例(结构体)
  */
 extern void BMI088_Read(IMU_Data_t *bmi088);
+uint8_t BMI088_IsReadValid(void);
 
 #endif

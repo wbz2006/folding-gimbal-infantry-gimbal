@@ -97,7 +97,7 @@ uint8_t USARTIsReady(USARTInstance *_instance)
  *        我们只希望处理，因此直接关闭DMA半传输中断第一种和第三种情况
  *
  * @param huart 发生中断的串口
- * @param Size 此次接收到的总数居量,暂时没用
+ * @param Size 此次实际收到的字节数
  */
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
@@ -105,6 +105,7 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
     { // find the instance which is being handled
         if (huart == usart_instance[i]->usart_handle)
         { // call the callback function if it is not NULL
+            usart_instance[i]->recv_len = Size;
             if (usart_instance[i]->module_callback != NULL)
             {
                 usart_instance[i]->module_callback();

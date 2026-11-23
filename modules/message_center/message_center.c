@@ -88,7 +88,7 @@ uint8_t SubGetMessage(Subscriber_t *sub, void *data_ptr)
         return 0;
     }
     memcpy(data_ptr, sub->queue[sub->front_idx], sub->data_len);
-    sub->front_idx = (sub->front_idx++) % QUEUE_SIZE; // 队列头索引增加
+    sub->front_idx = (sub->front_idx + 1U) % QUEUE_SIZE; // 队列头索引增加
     sub->temp_size--;                                 // pop一个数据,长度减1
     return 1;
 }

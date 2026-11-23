@@ -213,7 +213,7 @@ void IMU_QuaternionEKF_Update(float gx, float gy, float gz, float ax, float ay, 
     }
     QEKF_INS.YawTotalAngle = 360.0f * QEKF_INS.YawRoundCount + QEKF_INS.Yaw;
     QEKF_INS.YawAngleLast = QEKF_INS.Yaw;
-    QEKF_INS.UpdateCount++; // 初始化低通滤波用,计数测试用
+    QEKF_INS.UpdateCount++; // 初始化低通滤波用
 }
 
 /**
