@@ -74,8 +74,8 @@ static gimbal_request_mode_e gimbal_request_mode; // 云台形态请求，在最
 /**
  * @brief CMD 应用初始化：遥控器、消息收发、反馈守护与板间通信。
  *
- * 初始形态请求为折叠、底盘不跟随、机器人状态 STOP；输入有效后按各应用
- * 健康状态分别放行。
+ * 初始形态请求在 Yaw 调参时为展开，其余为折叠；底盘不跟随、机器人状态 STOP。
+ * 输入有效后按各应用健康状态分别放行。
  */
 void RobotCMDInit()
 {
@@ -114,12 +114,12 @@ void RobotCMDInit()
     gimbal_cmd_send.pitch = 0.0f;
     gimbal_cmd_send.yaw = 0;
     gimbal_cmd_send.gimbal_mode = GIMBAL_IMU_MODE;  // 云台闭环控制模式
-    gimbal_cmd_send.request_mode = GIMBAL_REQUEST_FOLD; // 启动默认请求折叠
+    gimbal_cmd_send.request_mode = GIMBAL_YAW_TUNING ? GIMBAL_REQUEST_DEPLOY : GIMBAL_REQUEST_FOLD;
     chassis_cmd_send.chassis_mode = CHASSIS_NO_FOLLOW;
     chassis_cmd_send.wz = 0;
 
     normal_chassis_mode = CHASSIS_NO_FOLLOW;
-    gimbal_request_mode = GIMBAL_REQUEST_FOLD;
+    gimbal_request_mode = gimbal_cmd_send.request_mode;
     robot_state = ROBOT_STOP;
 }
 
@@ -151,7 +151,9 @@ static void RemoteControlSet(void)
 {
     const uint8_t left_switch = rc_data[TEMP].rc.switch_left;
     const uint8_t right_switch = rc_data[TEMP].rc.switch_right;
-    if (switch_is_down(left_switch))
+    if (GIMBAL_YAW_TUNING)
+        gimbal_request_mode = GIMBAL_REQUEST_DEPLOY;
+    else if (switch_is_down(left_switch))
         gimbal_request_mode = GIMBAL_REQUEST_FOLD;
     else if (switch_is_mid(left_switch))
         gimbal_request_mode = GIMBAL_REQUEST_DEPLOY;
@@ -235,7 +237,7 @@ static void ArbitrateControlOutput(void)
     // 左拨杆处于下(折叠)/中(展开)档，即用户正在发出运动指令
     const bool remote_motion = InputValid() &&
         (switch_is_mid(rc_data[TEMP].rc.switch_left) || switch_is_down(rc_data[TEMP].rc.switch_left));
-    const bool enabled = robot_state == ROBOT_READY;
+    const bool enabled = INS_IsReady() && robot_state == ROBOT_READY;
     const bool gimbal_ready = FeedbackReady() &&
                               gimbal_fetch_data.action_fault_flags == GIMBAL_ACTION_FAULT_NONE;
     const bool shoot_ready = ShootFeedbackReady() && !FaultActive(&shoot_fetch_data.fault);
@@ -247,7 +249,7 @@ static void ArbitrateControlOutput(void)
     // 临时单向控制：底盘回包不参与放行，底盘自行处理命令失联和轮电机故障。
     const bool chassis_allowed = remote_motion && enabled && gimbal_ready;
     const bool yaw_allowed = remote_motion && enabled && gimbal_ready && deployed;
-    const bool pitch_allowed = remote_motion && enabled && gimbal_ready && deployed;           // 仅部署完成接受 Pitch 增量
+    const bool pitch_allowed = !GIMBAL_YAW_TUNING && remote_motion && enabled && gimbal_ready && deployed;
     gimbal_cmd_send.request_mode = gimbal_request_mode; // 本地形态请求直接下发
     // 动作故障保持本地停机；右上档才发送零力矩确认，不随普通故障自动重试。
     const bool action_waiting = DaemonIsOnline(gimbal_feedback_daemon) &&
@@ -260,13 +262,13 @@ static void ArbitrateControlOutput(void)
         chassis_cmd_send.chassis_mode = CHASSIS_ZERO_FORCE;
     if (chassis_allowed)
     {
-        chassis_cmd_send.vx = 10.0f * (float)rc_data[TEMP].rc.rocker_r_;
-        chassis_cmd_send.vy = 10.0f * (float)rc_data[TEMP].rc.rocker_r1;
+        chassis_cmd_send.vy = 1.0f * (float)rc_data[TEMP].rc.rocker_r_;
+        chassis_cmd_send.vx = -1.0f * (float)rc_data[TEMP].rc.rocker_r1;
         if (folded)
         {
             chassis_cmd_send.chassis_mode = CHASSIS_FOLDED_ROTATE;
             chassis_cmd_send.wz = float_constrain(
-                8.0f * (float)rc_data[TEMP].rc.rocker_l_, -4500.0f, 4500.0f);
+                0.04f * (float)rc_data[TEMP].rc.rocker_l_, -4500.0f, 4500.0f);
         }
         else if (deployed)
             chassis_cmd_send.chassis_mode = normal_chassis_mode;

@@ -31,12 +31,25 @@
 
 /* 机器人重要参数定义,注意根据不同机器人进行修改,浮点数需要以.0或f结尾,无符号以u结尾 */
 // 云台参数
+// 调参时只开启一项，三项均为 0 时恢复折叠联动。
+// 上轴调参：下轴和 Yaw 保持失能。
+#ifndef GIMBAL_UPPER_PITCH_TUNING
+#define GIMBAL_UPPER_PITCH_TUNING 0
+#endif
+// 下轴调参：上轴调平、Yaw 失能，停用调平回退和动作超时。
+#ifndef GIMBAL_LOWER_PITCH_TUNING
+#define GIMBAL_LOWER_PITCH_TUNING 0
+#endif
+// Yaw 调参：固定展开请求，上下 Pitch 保持展开姿态。
+#ifndef GIMBAL_YAW_TUNING
+#define GIMBAL_YAW_TUNING 0
+#endif
 #define YAW_CHASSIS_ALIGN_ECD 2711  // 云台和底盘对齐指向相同方向时的电机编码器值,若对云台有机械改动需要修改
-#define GIMBAL_YAW_MECHANICAL_CENTER_DEG 0.0f // Yaw 机械中位的电机单圈角，degree；待实测替换
+#define GIMBAL_YAW_MECHANICAL_CENTER_DEG 270.4f // Yaw 机械中位的电机单圈角，degree
 #define YAW_ECD_GREATER_THAN_4096 0 // ALIGN_ECD值是否大于4096,是为1,否为0;用于计算云台偏转角度
 #define PITCH_HORIZON_ECD 3412      // 云台处于水平位置时编码器值,若对云台有机械改动需要修改
-#define PITCH_MAX_ANGLE 25.0f       // 部署态上 Pitch 相对水平位置的目标上限，deg
-#define PITCH_MIN_ANGLE (-35.0f)    // 部署态上 Pitch 相对水平位置的目标下限，deg
+#define PITCH_MAX_ANGLE 15.0f       // 部署态上 Pitch 相对水平位置的目标上限，deg
+#define PITCH_MIN_ANGLE (-15.0f)    // 部署态上 Pitch 相对水平位置的目标下限，deg
 #define APP_COMMAND_TIMEOUT_MS 50U   // 应用控制命令新鲜度上限，daemon 周期换算见 daemon.h
 #define APP_FEEDBACK_TIMEOUT_MS 50U  // 应用反馈新鲜度上限，待调度实测确认
 // 发射参数
