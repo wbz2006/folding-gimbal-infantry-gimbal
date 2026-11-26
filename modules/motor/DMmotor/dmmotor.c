@@ -83,6 +83,19 @@ static void DMMotorSetMode(DMMotor_Mode_e cmd, DMMotorInstance *motor)
     CANTransmit(motor->motor_can_instace, 1);
 }
 
+static void DMMotorUpdateControlPosition(DMMotorInstance *motor)
+{
+    float position = motor->measure.position;
+    if (motor->position_center_enabled)
+    {
+        while (position - motor->position_center > PI)
+            position -= PI2;
+        while (position - motor->position_center < -PI)
+            position += PI2;
+    }
+    motor->measure.control_position = position;
+}
+
 /**
  * @brief 解析达妙电机 CAN 反馈。
  *
@@ -105,6 +118,7 @@ static void DMMotorDecode(CANInstance *motor_can)
 
     tmp = (uint16_t)((rxbuff[1] << 8) | rxbuff[2]);
     measure->position = uint_to_float(tmp, DM_P_MIN, DM_P_MAX, 16);
+    DMMotorUpdateControlPosition(motor);
 
     /*
      * 达妙反馈没有 DJI 电机的原始 ECD 字段，单圈角度由位置反馈换算得到。
@@ -184,7 +198,7 @@ static float DMMotorGetAngleMeasure(
         return *motor->other_angle_feedback_ptr;
     }
 
-    return motor->measure.position;
+    return motor->measure.control_position;
 }
 
 /**
@@ -437,6 +451,13 @@ void DMMotorResetPIDState(DMMotorInstance *motor)
     PIDResetState(&motor->current_PID);
 }
 
+void DMMotorSetPositionCenter(DMMotorInstance *motor, float center)
+{
+    motor->position_center = center;
+    motor->position_center_enabled = 1;
+    DMMotorUpdateControlPosition(motor);
+}
+
 /**
  * @brief 设置外部多环 PID 的参考输入。
  *
@@ -466,6 +487,12 @@ void DMMotorRequestEnable(DMMotorInstance *motor)
 {
     DMMotorSendMIT(motor, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
     DMMotorSetMode(DM_CMD_MOTOR_MODE, motor);
+}
+
+void DMMotorDisable(DMMotorInstance *motor)
+{
+    DMMotorStop(motor);
+    DMMotorSetMode(DM_CMD_RESET_MODE, motor);
 }
 
 /**

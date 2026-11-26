@@ -65,6 +65,7 @@ typedef struct
     float velocity;         /**< 电机速度，单位 rad/s。 */
     float last_position;    /**< 上一次位置反馈，单位 rad。 */
     float position;         /**< 当前电机位置，单位 rad。 */
+    float control_position; /**< 外部位置闭环反馈；配置中心后映射到中心 ±π，单位 rad。 */
     float angle_single_round; /**< 当前单圈角度，单位 degree，范围为 [0, 360)。 */
     float torque;           /**< 当前反馈力矩，单位 N*m。 */
     float T_Mos;            /**< MOS 温度。 */
@@ -132,6 +133,8 @@ typedef struct
     DaemonInstance *motor_daemon;               /**< 反馈离线监测实例。 */
     volatile uint32_t feedback_bus_off_count;
     uint32_t lost_cnt;                          /**< 预留离线计数。 */
+    float position_center;
+    uint8_t position_center_enabled;
 } DMMotorInstance;
 
 /**
@@ -152,6 +155,13 @@ typedef enum
  * @return 初始化成功返回电机实例指针，失败返回 NULL。
  */
 DMMotorInstance *DMMotorInit(Motor_Init_Config_s *config);
+
+/**
+ * @brief 初始化时配置有限行程电机的控制角度中心，单位 rad。
+ * @note 机械行程须位于 center ±π 内。保留原始 position，仅映射 control_position；
+ *       未调用时沿用原始反馈。该配置不恢复多圈计数，也不修改电机零点或 MIT 目标。
+ */
+void DMMotorSetPositionCenter(DMMotorInstance *motor, float center);
 
 /**
  * @brief 清除达妙电机各PID环的运行状态，保留PID控制参数。
@@ -190,6 +200,9 @@ void DMMotorEnable(DMMotorInstance *motor);
  * @param motor 电机实例。
  */
 void DMMotorRequestEnable(DMMotorInstance *motor);
+
+// 同时停止软件输出并发送驱动器失能命令；恢复时需 DMMotorRequestEnable。
+void DMMotorDisable(DMMotorInstance *motor);
 
 /**
  * @brief 停止电机周期控制输出。

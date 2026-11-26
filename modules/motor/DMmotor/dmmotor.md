@@ -43,9 +43,22 @@ MIT 参数使用物理量配置，驱动内部负责限幅、编码和 CAN 打�
 反馈测量值中：
 
 - `motor->measure.position` 为达妙协议解码得到的电机轴位置，单位为 `rad`；
+- `motor->measure.control_position` 为库内外部角度环在 `MOTOR_FEED` 下使用的位置，默认等于 `position`；
 - `motor->measure.angle_single_round` 为由 `position` 换算得到的单圈角度，单位为 `degree`，范围为 `[0, 360)`；
 - 达妙反馈报文不包含 DJI 电机的原始 ECD 字段，因此 `angle_single_round` 不是由编码器计数直接换算得到；
 - `angle_single_round` 的零点与达妙电机当前编码器零位一致，不能替代尚未实现的多圈角度 `total_round`。
+
+对于行程小于一圈、重新上电后反馈可能相差 `2π` 的关节，在初始化后配置工作区间中心：
+
+```c
+DMMotorSetPositionCenter(lower_pitch_motor, -2.7f);
+```
+
+库会在每次接收反馈时，将 `control_position` 映射到中心 `±π` 范围内。例如原始反馈
+`+2.61635` 会映射为 `−3.66684 rad`。应用层的启动位置锁存、轨迹规划和到位判断也应使用
+`control_position`，与库内角度环保持一致。未配置的电机保留原始多圈反馈。
+该功能不修改电机零点、不恢复掉电前的多圈计数，也不转换直接 MIT 控制的 `position_des`；
+应用需保证完整机械行程都在所选区间内。
 
 注意：如果应用层使用 IMU 角度，通常是角度制或云台坐标，不能直接传给 `position_des`。应先完成：
 
@@ -266,6 +279,7 @@ tau = 0;
 
 ```c
 DMMotorInstance *DMMotorInit(Motor_Init_Config_s *config);
+void DMMotorSetPositionCenter(DMMotorInstance *motor, float center);
 void DMMotorSetRef(DMMotorInstance *motor, float ref);
 void DMMotorSetControlMode(DMMotorInstance *motor, DMMotor_Control_Mode_e mode);
 void DMMotorSetMITConfig(DMMotorInstance *motor, const DMMotor_MIT_Config_s *config);
