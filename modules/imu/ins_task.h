@@ -85,6 +85,8 @@ typedef struct
  */
 attitude_t *INS_Init(void);
 attitude_t *INS_GetData(void);
+// 校准、姿态初始化和首次有效解算均完成后置位，运行时失反馈不清除此启动标志。
+uint8_t INS_IsReady(void);
 
 /**
  * @brief 此函数放入实时系统中,以1kHz频率运行

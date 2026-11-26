@@ -23,6 +23,12 @@
 
 static INS_t INS;
 static DaemonInstance *ins_feedback_daemon;
+static volatile uint8_t ins_ready;
+
+uint8_t INS_IsReady(void)
+{
+    return ins_ready;
+}
 
 uint8_t INS_IsFeedbackValid(void)
 {
@@ -176,6 +182,7 @@ void INS_Task(void)
         INS.Roll = QEKF_INS.Roll;
         INS.YawTotalAngle = QEKF_INS.YawTotalAngle;
         DaemonReload(ins_feedback_daemon);
+        ins_ready = 1;
     }
 
     if ((count++ % 1000) == 0)
