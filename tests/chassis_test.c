@@ -38,7 +38,7 @@ void CANServiceTask(void) {}
 DJIMotorInstance *DJIMotorInit(Motor_Init_Config_s *config)
 {
     static int i;
-    const unsigned motor_ids[] = {1, 4, 2, 3};
+    const unsigned motor_ids[] = {2, 1, 3, 4};
     assert(config->can_init_config.can_handle == &hcan3);
     assert(config->can_init_config.tx_id == motor_ids[i]);
     DJIMotorInstance *m = &motors[i++];
@@ -79,7 +79,7 @@ int main(void)
             .chassis_mode=CHASSIS_FOLDED_ROTATE, .wz=folded_speeds[i]};
         ChassisTask();
         assert(chassis_cmd_recv.chassis_mode == CHASSIS_FOLDED_ROTATE);
-        assert(fabsf(chassis_cmd_recv.wz - float_constrain(folded_speeds[i], -4500, 4500)) < 0.001f);
+        assert(fabsf(chassis_cmd_recv.wz - 10.0f * float_constrain(folded_speeds[i], -4500, 4500)) < 0.001f);
         assert(chassis_vx == 1200 && chassis_vy == -500);
         for (int j = 0; j < 4; ++j) assert(!motors[j].stopped);
     }

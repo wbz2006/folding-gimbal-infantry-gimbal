@@ -36,6 +36,17 @@ fold_sources = [ROOT/'tests/gimbal_fold_test.c', ROOT/'modules/remote/remote_con
                 ROOT/'modules/can_comm/can_comm.c', ROOT/'modules/algorithm/crc8.c',
                 ROOT/'modules/algorithm/controller.c', ROOT/'modules/algorithm/user_lib.c',
                 ROOT/'modules/message_center/message_center.c', ROOT/'modules/daemon/daemon.c']
+run('gimbal_upper_pitch_tuning', fold_sources, ['-DTEST_UPPER_PITCH_TUNING',
+    '-DGIMBAL_UPPER_PITCH_TUNING=1', '-DGIMBAL_LOWER_PITCH_TUNING=0', '-DGIMBAL_YAW_TUNING=0'])
+run('gimbal_lower_pitch_tuning', fold_sources, ['-DTEST_LOWER_PITCH_TUNING',
+    '-DGIMBAL_UPPER_PITCH_TUNING=0', '-DGIMBAL_LOWER_PITCH_TUNING=1', '-DGIMBAL_YAW_TUNING=0'])
+run('gimbal_yaw_tuning', fold_sources, ['-DTEST_YAW_TUNING', '-DGIMBAL_YAW_TUNING=1'])
+run('gimbal_switch', fold_sources, ['-DTEST_GIMBAL_SWITCH',
+    '-DGIMBAL_UPPER_PITCH_TUNING=0', '-DGIMBAL_LOWER_PITCH_TUNING=0', '-DGIMBAL_YAW_TUNING=0'])
+run('gimbal_lower_pitch_coordinate', fold_sources, ['-DTEST_LOWER_PITCH_COORDINATE',
+    '-DGIMBAL_UPPER_PITCH_TUNING=0', '-DGIMBAL_LOWER_PITCH_TUNING=0', '-DGIMBAL_YAW_TUNING=0'])
+run('gimbal_imu_startup', fold_sources, ['-DTEST_IMU_STARTUP',
+    '-DGIMBAL_UPPER_PITCH_TUNING=0', '-DGIMBAL_LOWER_PITCH_TUNING=0', '-DGIMBAL_YAW_TUNING=0'])
 run('gimbal_fold', fold_sources)
 run('gimbal_fold_center', fold_sources, ['-DTEST_MECHANICAL_CENTER'])
 run('daemon', [ROOT/'tests/daemon_test.c', ROOT/'modules/daemon/daemon.c'])
