@@ -185,6 +185,10 @@ float PIDCalculate(PIDInstance *pid, float measure, float ref)
         // 变速积分
         if (pid->Improve & PID_ChangingIntegrationRate)
             f_Changing_Integration_Rate(pid);
+        if (pid->IntegralUnwindGain > 1.0f &&
+            fabsf(pid->Err) > pid->IntegralUnwindThreshold &&
+            pid->ITerm * pid->Iout < 0.0f)
+            pid->ITerm *= pid->IntegralUnwindGain;
         // 微分先行
         if (pid->Improve & PID_Derivative_On_Measurement)
             f_Derivative_On_Measurement(pid);

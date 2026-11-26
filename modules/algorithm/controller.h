@@ -70,6 +70,8 @@ typedef struct
     float CoefB;             // 变速积分 ITerm = Err*((A-abs(err)+B)/A)  when B<|err|<A+B
     float Output_LPF_RC;     // 输出滤波器 RC = 1/omegac
     float Derivative_LPF_RC; // 微分滤波器系数
+    float IntegralUnwindGain;      // 积分消退倍率，<=1 时保持正常积分
+    float IntegralUnwindThreshold; // 仅在误差绝对值大于此值时加速消退
 
     //-----------------------------------
     // for calculating
@@ -113,6 +115,8 @@ typedef struct // config parameter
     float CoefB;         // ITerm = Err*((A-abs(err)+B)/A)  when B<|err|<A+B
     float Output_LPF_RC; // RC = 1/omegac
     float Derivative_LPF_RC;
+    float IntegralUnwindGain;
+    float IntegralUnwindThreshold;
 } PID_Init_Config_s;
 
 /**
