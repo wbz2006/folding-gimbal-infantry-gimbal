@@ -3,16 +3,16 @@
     "configurations": [
         {
             "name": "DAPLink: launch",
-            "cwd": "D:/Users/Download/folding-gimbal-infantry-gimbal",
-            "executable": "D:/Users/Download/folding-gimbal-infantry-gimbal/build/Basic_Framework_MC02.elf",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/Basic_Framework_MC02.elf",
             "request": "launch",
             "type": "cortex-debug",
             "servertype": "openocd",
             "device": "STM32H723VG",
             "configFiles": [
-                "D:/Users/Download/folding-gimbal-infantry-gimbal/openocd_dap.cfg"
+                "${workspaceFolder}/openocd_dap.cfg"
             ],
-            "svdFile": "D:/Users/Download/folding-gimbal-infantry-gimbal/STM32H723.svd",
+            "svdFile": "${workspaceFolder}/STM32H723.svd",
             "rtos": "FreeRTOS",
             "runToEntryPoint": "main",
             "preLaunchTask": "Build",
@@ -24,29 +24,29 @@
         },
         {
             "name": "DAPLink: attach",
-            "cwd": "D:/Users/Download/folding-gimbal-infantry-gimbal",
-            "executable": "D:/Users/Download/folding-gimbal-infantry-gimbal/build/Basic_Framework_MC02.elf",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/Basic_Framework_MC02.elf",
             "request": "attach",
             "type": "cortex-debug",
             "servertype": "openocd",
             "device": "STM32H723VG",
             "configFiles": [
-                "D:/Users/Download/folding-gimbal-infantry-gimbal/openocd_dap.cfg"
+                "${workspaceFolder}/openocd_dap.cfg"
             ],
-            "svdFile": "D:/Users/Download/folding-gimbal-infantry-gimbal/STM32H723.svd",
+            "svdFile": "${workspaceFolder}/STM32H723.svd",
             "rtos": "FreeRTOS",
             "showDevDebugOutput": "none"
         },
         {
             "name": "J-Link: launch",
-            "cwd": "D:/Users/Download/folding-gimbal-infantry-gimbal",
-            "executable": "D:/Users/Download/folding-gimbal-infantry-gimbal/build/Basic_Framework_MC02.elf",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/Basic_Framework_MC02.elf",
             "request": "launch",
             "type": "cortex-debug",
             "servertype": "jlink",
             "device": "STM32H723VG",
             "interface": "swd",
-            "svdFile": "D:/Users/Download/folding-gimbal-infantry-gimbal/STM32H723.svd",
+            "svdFile": "${workspaceFolder}/STM32H723.svd",
             "rtos": "FreeRTOS",
             "runToEntryPoint": "main",
             "preLaunchTask": "Build",
@@ -58,14 +58,14 @@
         },
         {
             "name": "J-Link: attach",
-            "cwd": "D:/Users/Download/folding-gimbal-infantry-gimbal",
-            "executable": "D:/Users/Download/folding-gimbal-infantry-gimbal/build/Basic_Framework_MC02.elf",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/Basic_Framework_MC02.elf",
             "request": "attach",
             "type": "cortex-debug",
             "servertype": "jlink",
             "device": "STM32H723VG",
             "interface": "swd",
-            "svdFile": "D:/Users/Download/folding-gimbal-infantry-gimbal/STM32H723.svd",
+            "svdFile": "${workspaceFolder}/STM32H723.svd",
             "rtos": "FreeRTOS",
             "showDevDebugOutput": "none"
         }
