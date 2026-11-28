@@ -31,8 +31,8 @@
 
 // 下 pitch 参考位置变化率及单周期最大计时步长。
 #define GIMBAL_LOWER_REF_RATE_RAD_S           1.2f
-#define GIMBAL_LOWER_SLOWDOWN_DISTANCE_RAD    0.01f
-#define GIMBAL_LOWER_FINAL_REF_RATE_RAD_S     0.75f
+#define GIMBAL_LOWER_SLOWDOWN_DISTANCE_RAD    0.05f
+#define GIMBAL_LOWER_FINAL_REF_RATE_RAD_S     0.55f
 #define GIMBAL_REF_MAX_DT_S                   0.02f
 
 // 到位条件持续时间、动作超时时间及电机使能重试间隔。
