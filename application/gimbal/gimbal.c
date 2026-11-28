@@ -14,6 +14,8 @@
 #define GIMBAL_FOLD_UPPER_PITCH_TARGET_DEG     (0.0f)
 #define GIMBAL_FOLD_LOWER_PITCH_TARGET_RAD     (-2.14f)
 #define GIMBAL_DEPLOY_LOWER_PITCH_TARGET_RAD   (-3.2f)
+#define GIMBAL_LOWER_PITCH_MIT_KP              (30.0f)
+#define GIMBAL_LOWER_PITCH_MIT_KD              (0.8f)
 
 // 到位位置误差限值。
 #define GIMBAL_UPPER_PITCH_TOLERANCE_DEG      2.0f
@@ -70,6 +72,17 @@ static GimbalFoldCtrl_s fold_ctrl = {
     .state = GIMBAL_FOLDING,
     .step = FOLD_STEP_LEVEL_UPPER_PITCH,
 };
+
+static void SetLowerPitchRef(float ref)
+{
+    DMMotorSetRef(lower_pitch_motor, ref);
+    // MIT 位置目标使用原始电机坐标，需要补回中心映射移除的整圈偏移。
+    const float motor_position_offset = lower_pitch_motor->measure.position -
+                                        lower_pitch_motor->measure.control_position;
+    DMMotorSetMITRef(lower_pitch_motor, ref + motor_position_offset, 0.0f,
+                     GIMBAL_LOWER_PITCH_MIT_KP,
+                     GIMBAL_LOWER_PITCH_MIT_KD, 0.0f);
+}
 
 static bool GimbalTargetReached(gimbal_reach_target_type_e target_type)
 {
@@ -223,7 +236,7 @@ static void RunTransition(uint32_t now, float lower_target,
         }
     }
 
-    DMMotorSetRef(lower_pitch_motor, fold_ctrl.lower_ref);
+    SetLowerPitchRef(fold_ctrl.lower_ref);
     DMMotorEnable(lower_pitch_motor);
 }
 
@@ -352,6 +365,7 @@ void GimbalInit(void)
     upper_pitch_motor = DMMotorInit(&upper_pitch_config);
     DMMotorDisable(upper_pitch_motor);
     lower_pitch_motor = DMMotorInit(&lower_pitch_config);
+    DMMotorSetControlMode(lower_pitch_motor, DMMOTOR_CONTROL_MIT);
     DMMotorSetPositionCenter(lower_pitch_motor,
         0.5f * (GIMBAL_FOLD_LOWER_PITCH_TARGET_RAD + GIMBAL_DEPLOY_LOWER_PITCH_TARGET_RAD));
     DMMotorDisable(lower_pitch_motor);
@@ -461,7 +475,7 @@ void GimbalTask(void)
                 HoldYawCenter();
             DMMotorEnable(upper_pitch_motor);
             DMMotorSetRef(upper_pitch_motor, GIMBAL_FOLD_UPPER_PITCH_TARGET_DEG);
-            DMMotorSetRef(lower_pitch_motor, fold_ctrl.state == GIMBAL_FOLDED ?
+            SetLowerPitchRef(fold_ctrl.state == GIMBAL_FOLDED ?
                 GIMBAL_FOLD_LOWER_PITCH_TARGET_RAD : GIMBAL_DEPLOY_LOWER_PITCH_TARGET_RAD);
             DMMotorEnable(lower_pitch_motor);
         }
@@ -471,7 +485,7 @@ void GimbalTask(void)
             DMMotorSetRef(yaw_motor, gimbal_cmd_recv.yaw);
             DMMotorEnable(upper_pitch_motor);
             DMMotorSetRef(upper_pitch_motor, gimbal_cmd_recv.pitch);
-            DMMotorSetRef(lower_pitch_motor, GIMBAL_DEPLOY_LOWER_PITCH_TARGET_RAD);
+            SetLowerPitchRef(GIMBAL_DEPLOY_LOWER_PITCH_TARGET_RAD);
             DMMotorEnable(lower_pitch_motor);
         }
         if (!GIMBAL_LOWER_PITCH_TUNING && transitioning &&
