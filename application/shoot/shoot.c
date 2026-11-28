@@ -25,23 +25,22 @@ static DaemonInstance *shoot_cmd_daemon;
 
 void ShootInit()
 {
-    // 左摩擦轮
     Motor_Init_Config_s friction_config = {
         .can_init_config = {
-            .can_handle = &hcan2,
+            .can_handle = &hcan1,
         },
         .controller_param_init_config = {
             .speed_PID = {
-                .Kp = 0, // 20
-                .Ki = 0, // 1
+                .Kp = 20, // 20
+                .Ki = 1, // 1
                 .Kd = 0,
                 .Improve = PID_Integral_Limit,
                 .IntegralLimit = 10000,
                 .MaxOut = 15000,
             },
             .current_PID = {
-                .Kp = 0, // 0.7
-                .Ki = 0, // 0.1
+                .Kp = 0.7, // 0.7
+                .Ki = 0.1, // 0.1
                 .Kd = 0,
                 .Improve = PID_Integral_Limit,
                 .IntegralLimit = 10000,
@@ -51,7 +50,6 @@ void ShootInit()
         .controller_setting_init_config = {
             .angle_feedback_source = MOTOR_FEED,
             .speed_feedback_source = MOTOR_FEED,
-
             .outer_loop_type = SPEED_LOOP,
             .close_loop_type = SPEED_LOOP | CURRENT_LOOP,
             .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
@@ -71,6 +69,9 @@ void ShootInit()
             .can_handle = &hcan2,
             .tx_id = 0x06,
             .rx_id = 0x302,
+        },
+        .controller_setting_init_config = {
+            .motor_reverse_flag = MOTOR_DIRECTION_REVERSE,
         },
         .motor_type = DM4310,
     };
@@ -159,20 +160,20 @@ void ShootTask()
         switch (shoot_cmd_recv.bullet_speed)
         {
         case SMALL_AMU_15:
-            DJIMotorSetRef(friction_l, 0);
-            DJIMotorSetRef(friction_r, 0);
+            DJIMotorSetRef(friction_l, 4000);
+            DJIMotorSetRef(friction_r, 4000);
             break;
         case SMALL_AMU_18:
-            DJIMotorSetRef(friction_l, 0);
-            DJIMotorSetRef(friction_r, 0);
+            DJIMotorSetRef(friction_l, 4000);
+            DJIMotorSetRef(friction_r, 4000);
             break;
         case SMALL_AMU_30:
-            DJIMotorSetRef(friction_l, 0);
-            DJIMotorSetRef(friction_r, 0);
+            DJIMotorSetRef(friction_l, 4000);
+            DJIMotorSetRef(friction_r, 4000);
             break;
         default: // 弹速未配置时保持关闭
-            DJIMotorStop(friction_l);
-            DJIMotorStop(friction_r);
+            DJIMotorSetRef(friction_l, 4000);
+            DJIMotorSetRef(friction_r, 4000);
             break;
         }
     }
@@ -181,17 +182,6 @@ void ShootTask()
         DJIMotorSetRef(friction_l, 0);
         DJIMotorSetRef(friction_r, 0);
     }
-
-    // 开关弹舱盖
-    if (shoot_cmd_recv.lid_mode == LID_CLOSE)
-    {
-        //...
-    }
-    else if (shoot_cmd_recv.lid_mode == LID_OPEN)
-    {
-        //...
-    }
-
     // 反馈数据,目前暂时没有要设定的反馈数据,后续可能增加应用离线监测以及卡弹反馈
     PubPushMessage(shoot_pub, (void *)&shoot_feedback_data);
 }

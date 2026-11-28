@@ -172,7 +172,7 @@ static void RemoteControlSet(void)
     else
         shoot_cmd_send.friction_mode = FRICTION_OFF;
     // 拨弹控制,遥控器固定为一种拨弹模式,可自行选择
-    if (rc_data[TEMP].rc.dial < -500)
+    if (rc_data[TEMP].rc.dial < -200)
         shoot_cmd_send.load_mode = LOAD_BURSTFIRE;
     else
         shoot_cmd_send.load_mode = LOAD_STOP;
