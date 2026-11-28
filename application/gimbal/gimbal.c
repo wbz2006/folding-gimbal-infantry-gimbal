@@ -14,6 +14,10 @@
 #define GIMBAL_FOLD_UPPER_PITCH_TARGET_DEG     (0.0f)
 #define GIMBAL_FOLD_LOWER_PITCH_TARGET_RAD     (-2.14f)
 #define GIMBAL_DEPLOY_LOWER_PITCH_TARGET_RAD   (-3.2f)
+#define GIMBAL_LOWER_PITCH_MIT_KP              (100.0f)
+#define GIMBAL_LOWER_PITCH_MIT_KD              (2.5f)
+// MIT 力矩前馈，单位 N*m；需按实际保持力矩标定正负和大小。
+#define GIMBAL_LOWER_PITCH_MIT_TORQUE_FF_NM    (0.3f)
 
 // 到位位置误差限值。
 #define GIMBAL_UPPER_PITCH_TOLERANCE_DEG      2.0f
@@ -26,9 +30,9 @@
 #define GIMBAL_LOWER_STABLE_SPEED_RAD_S       0.03f
 
 // 下 pitch 参考位置变化率及单周期最大计时步长。
-#define GIMBAL_LOWER_REF_RATE_RAD_S           0.25f
-#define GIMBAL_LOWER_SLOWDOWN_DISTANCE_RAD    0.05f
-#define GIMBAL_LOWER_FINAL_REF_RATE_RAD_S     0.05f
+#define GIMBAL_LOWER_REF_RATE_RAD_S           1.2f
+#define GIMBAL_LOWER_SLOWDOWN_DISTANCE_RAD    0.01f
+#define GIMBAL_LOWER_FINAL_REF_RATE_RAD_S     0.75f
 #define GIMBAL_REF_MAX_DT_S                   0.02f
 
 // 到位条件持续时间、动作超时时间及电机使能重试间隔。
@@ -70,6 +74,18 @@ static GimbalFoldCtrl_s fold_ctrl = {
     .state = GIMBAL_FOLDING,
     .step = FOLD_STEP_LEVEL_UPPER_PITCH,
 };
+
+static void SetLowerPitchRef(float ref)
+{
+    DMMotorSetRef(lower_pitch_motor, ref);
+    // MIT 位置目标使用原始电机坐标，需要补回中心映射移除的整圈偏移。
+    const float motor_position_offset = lower_pitch_motor->measure.position -
+                                        lower_pitch_motor->measure.control_position;
+    DMMotorSetMITRef(lower_pitch_motor, ref + motor_position_offset, 0.0f,
+                     GIMBAL_LOWER_PITCH_MIT_KP,
+                     GIMBAL_LOWER_PITCH_MIT_KD,
+                     GIMBAL_LOWER_PITCH_MIT_TORQUE_FF_NM);
+}
 
 static bool GimbalTargetReached(gimbal_reach_target_type_e target_type)
 {
@@ -123,9 +139,6 @@ static void UpdateFoldState(uint32_t now)
         fold_ctrl.last_run = now;
         DMMotorResetPIDState(yaw_motor);
         DMMotorResetPIDState(upper_pitch_motor);
-        // 连续控制时保留承重积分，停机或失联恢复后才重新初始化下轴。
-        if (!fold_ctrl.active)
-            DMMotorResetPIDState(lower_pitch_motor);
     }
     fold_ctrl.active = true;
 }
@@ -223,14 +236,13 @@ static void RunTransition(uint32_t now, float lower_target,
         }
     }
 
-    DMMotorSetRef(lower_pitch_motor, fold_ctrl.lower_ref);
+    SetLowerPitchRef(fold_ctrl.lower_ref);
     DMMotorEnable(lower_pitch_motor);
 }
 
 void GimbalInit(void)
 {
     gimbal_IMU_data = INS_GetData();
-
     Motor_Init_Config_s yaw_config = {
         .can_init_config = {
             .can_handle = &hcan2,
@@ -278,7 +290,7 @@ void GimbalInit(void)
         },
         .controller_param_init_config = {
             .angle_PID = {
-                .Kp = 1.0f,
+                .Kp = 0.8f,
                 .Ki = 0.0f,
                 .Kd = 0.0f,
                 .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit |
@@ -314,36 +326,6 @@ void GimbalInit(void)
             .tx_id = 0x02,
             .rx_id = 0x602,
         },
-        .controller_param_init_config = {
-            .angle_PID = {
-                .Kp = 7.0f,
-                .Ki = 0.0f,
-                .Kd = 0.0f,
-                .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit |
-                           PID_Derivative_On_Measurement,
-                .IntegralLimit = 100.0f,
-                .MaxOut = 5.0f,
-            },
-            .speed_PID = {
-                .Kp = 1.5f,
-                .Ki = 0.4f,
-                .Kd = 0.0f,
-                .IntegralUnwindGain = 4.0f,
-                // 反馈速度量化抖动约为 0.01 rad/s，小误差沿用正常积分。
-                .IntegralUnwindThreshold = 0.1f,
-                .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit |
-                           PID_Derivative_On_Measurement,
-                .IntegralLimit = 1.0f,
-                .MaxOut = 5.0f,
-            },
-        },
-        .controller_setting_init_config = {
-            .angle_feedback_source = MOTOR_FEED,
-            .speed_feedback_source = MOTOR_FEED,
-            .outer_loop_type = ANGLE_LOOP,
-            .close_loop_type = ANGLE_LOOP | SPEED_LOOP,
-            .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
-        },
         .motor_type = DM4310,
     };
 
@@ -352,6 +334,7 @@ void GimbalInit(void)
     upper_pitch_motor = DMMotorInit(&upper_pitch_config);
     DMMotorDisable(upper_pitch_motor);
     lower_pitch_motor = DMMotorInit(&lower_pitch_config);
+    DMMotorSetControlMode(lower_pitch_motor, DMMOTOR_CONTROL_MIT);
     DMMotorSetPositionCenter(lower_pitch_motor,
         0.5f * (GIMBAL_FOLD_LOWER_PITCH_TARGET_RAD + GIMBAL_DEPLOY_LOWER_PITCH_TARGET_RAD));
     DMMotorDisable(lower_pitch_motor);
@@ -461,7 +444,7 @@ void GimbalTask(void)
                 HoldYawCenter();
             DMMotorEnable(upper_pitch_motor);
             DMMotorSetRef(upper_pitch_motor, GIMBAL_FOLD_UPPER_PITCH_TARGET_DEG);
-            DMMotorSetRef(lower_pitch_motor, fold_ctrl.state == GIMBAL_FOLDED ?
+            SetLowerPitchRef(fold_ctrl.state == GIMBAL_FOLDED ?
                 GIMBAL_FOLD_LOWER_PITCH_TARGET_RAD : GIMBAL_DEPLOY_LOWER_PITCH_TARGET_RAD);
             DMMotorEnable(lower_pitch_motor);
         }
@@ -471,7 +454,7 @@ void GimbalTask(void)
             DMMotorSetRef(yaw_motor, gimbal_cmd_recv.yaw);
             DMMotorEnable(upper_pitch_motor);
             DMMotorSetRef(upper_pitch_motor, gimbal_cmd_recv.pitch);
-            DMMotorSetRef(lower_pitch_motor, GIMBAL_DEPLOY_LOWER_PITCH_TARGET_RAD);
+            SetLowerPitchRef(GIMBAL_DEPLOY_LOWER_PITCH_TARGET_RAD);
             DMMotorEnable(lower_pitch_motor);
         }
         if (!GIMBAL_LOWER_PITCH_TUNING && transitioning &&

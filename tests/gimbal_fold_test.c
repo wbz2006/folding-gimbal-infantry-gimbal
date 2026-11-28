@@ -125,6 +125,14 @@ static void motor_feedback(DMMotorInstance *motor, float position, float velocit
     can->can_module_callback(can);
 }
 
+#if defined(TEST_LOWER_PITCH_COORDINATE) || defined(TEST_LOWER_PITCH_TUNING)
+static float lower_pitch_commanded_position(void)
+{
+    return uint_to_float(lower_pitch_motor->motor_send_mailbox.position_des,
+                         DM_P_MIN, DM_P_MAX, 16);
+}
+#endif
+
 static void step(void)
 {
     now_ms += 5;
@@ -324,7 +332,7 @@ static void yaw_tuning_deployed(void)
         assert(fold_ctrl.state == GIMBAL_UNFOLDING);
         assert(fold_ctrl.step == FOLD_STEP_LEVEL_UPPER_PITCH);
         assert(yaw_motor->stop_flag == MOTOR_STOP);
-        NEAR(lower_pitch_motor->pid_ref, positions[2]);
+        NEAR(fold_ctrl.lower_ref, positions[2]);
         NEAR(upper_pitch_motor->pid_ref, GIMBAL_FOLD_UPPER_PITCH_TARGET_DEG);
         NEAR(gimbal_cmd_send.pitch, 0);
     }
@@ -335,7 +343,7 @@ static void yaw_tuning_deployed(void)
         assert(fold_ctrl.state == GIMBAL_UNFOLDING);
         assert(yaw_motor->stop_flag == MOTOR_STOP);
     }
-    NEAR(lower_pitch_motor->pid_ref, GIMBAL_DEPLOY_LOWER_PITCH_TARGET_RAD);
+    NEAR(fold_ctrl.lower_ref, GIMBAL_DEPLOY_LOWER_PITCH_TARGET_RAD);
     positions[2] = GIMBAL_DEPLOY_LOWER_PITCH_TARGET_RAD + PI2;
     velocities[2] = 0.1f;
     for (unsigned i = 0; i < 30; ++i)
@@ -377,7 +385,7 @@ static void yaw_tuning_deployed(void)
         assert(lower_pitch_motor->stop_flag == MOTOR_ENALBED);
         NEAR(gimbal_cmd_send.pitch, 0);
         NEAR(upper_pitch_motor->pid_ref, GIMBAL_FOLD_UPPER_PITCH_TARGET_DEG);
-        NEAR(lower_pitch_motor->pid_ref, GIMBAL_DEPLOY_LOWER_PITCH_TARGET_RAD);
+        NEAR(fold_ctrl.lower_ref, GIMBAL_DEPLOY_LOWER_PITCH_TARGET_RAD);
     }
     assert(gimbal_feedback_data.action_fault_flags == GIMBAL_ACTION_FAULT_NONE);
 
@@ -407,42 +415,6 @@ static void yaw_tuning_deployed(void)
 #endif
 
 #ifdef TEST_LOWER_PITCH_TUNING
-static void lower_pitch_integral_unwind(void)
-{
-    PIDInstance accelerated = lower_pitch_motor->speed_PID;
-    PIDInstance ordinary = accelerated;
-    ordinary.IntegralUnwindGain = 1.0f;
-    const float errors[] = {0.4f, -0.4f, -0.4f, 0.02f};
-    const float initial_integrals[] = {-0.4f, 0.4f, -0.4f, -0.4f};
-    assert(accelerated.IntegralUnwindGain > 1.0f);
-    assert(upper_pitch_motor->speed_PID.IntegralUnwindGain == 0);
-    assert(yaw_motor->speed_PID.IntegralUnwindGain == 0);
-
-    for (unsigned test = 0; test < 4; ++test)
-    {
-        PIDResetState(&accelerated);
-        PIDResetState(&ordinary);
-        accelerated.Iout = ordinary.Iout = initial_integrals[test];
-        accelerated.Last_Err = ordinary.Last_Err = errors[test];
-        for (unsigned i = 0; i < 200; ++i)
-        {
-            PIDCalculate(&accelerated, 0, errors[test]);
-            PIDCalculate(&ordinary, 0, errors[test]);
-            assert(fabsf(accelerated.Iout) <= accelerated.IntegralLimit);
-            assert(fabsf(accelerated.Output) <= accelerated.MaxOut);
-        }
-        if (test < 2)
-        {
-            assert(accelerated.Iout * initial_integrals[test] < 0);
-            assert(ordinary.Iout * initial_integrals[test] > 0);
-        }
-        else
-            NEAR(accelerated.Iout, ordinary.Iout);
-    }
-    NEAR(accelerated.IntegralUnwindGain, lower_pitch_motor->speed_PID.IntegralUnwindGain);
-    puts("PASS lower Pitch integral: faster decay in both directions, normal buildup, small-error hold and preserved limits");
-}
-
 static void lower_pitch_tuning(void)
 {
     const unsigned yaw_id = yaw_motor->motor_can_instace->tx_id;
@@ -494,7 +466,7 @@ static void lower_pitch_tuning(void)
         for (unsigned i = 0; i < 1200 && fold_ctrl.state != expected; ++i)
         {
             const float previous_ref = fold_ctrl.lower_ref;
-            positions[2] = lower_pitch_motor->pid_ref;
+            positions[2] = fold_ctrl.lower_ref;
             imu.Pitch = i % 2 ? 15.0f : -15.0f;
             step();
             assert(fold_ctrl.step != FOLD_STEP_LEVEL_UPPER_PITCH);
@@ -506,7 +478,7 @@ static void lower_pitch_tuning(void)
             NEAR(upper_pitch_motor->pid_ref, GIMBAL_FOLD_UPPER_PITCH_TARGET_DEG);
         }
         assert(fold_ctrl.state == expected);
-        NEAR(lower_pitch_motor->pid_ref, target);
+        NEAR(fold_ctrl.lower_ref, target);
     }
     positions[2] = GIMBAL_DEPLOY_LOWER_PITCH_TARGET_RAD;
     sticks[2] = sticks[3] = 660;
@@ -549,7 +521,10 @@ static void lower_pitch_feedback_recovery(void)
     velocities[2] = 0;
     for (unsigned i = 0; i < 30; ++i) step();
     assert(fold_ctrl.state == GIMBAL_UNFOLDING);
-    assert(lower_pitch_motor->angle_PID.Output < 0);
+    assert(lower_pitch_motor->control_mode == DMMOTOR_CONTROL_MIT);
+    NEAR(lower_pitch_motor->mit_config.position_des,
+         lower_pitch_motor->pid_ref + lower_pitch_motor->measure.position -
+             lower_pitch_motor->measure.control_position);
 
     for (unsigned pass = 0; pass < 2; ++pass)
     {
@@ -574,19 +549,11 @@ static void lower_pitch_feedback_recovery(void)
         assert(lower_pitch_motor->stop_flag == MOTOR_STOP);
         assert(!fold_ctrl.active);
 
-        lower_pitch_motor->angle_PID.Iout = -2.0f;
-        lower_pitch_motor->speed_PID.Iout = -2.0f;
-        lower_pitch_motor->current_PID.Iout = -2.0f;
         states[2] = 1;
         step();
         assert(fold_ctrl.active);
         assert(!(gimbal_feedback_data.fault.motor_offline_flags & MOTOR_3_OFFLINE));
         NEAR(fold_ctrl.lower_ref, lower_pitch_motor->measure.position);
-        NEAR(lower_pitch_motor->angle_PID.Output, 0);
-        NEAR(lower_pitch_motor->angle_PID.Iout, 0);
-        NEAR(lower_pitch_motor->speed_PID.Iout, 0);
-        NEAR(lower_pitch_motor->current_PID.Iout, 0);
-
         const float direction = pass == 0 ? 1.0f : -1.0f;
         for (unsigned i = 0; i < 900; ++i)
         {
@@ -595,14 +562,19 @@ static void lower_pitch_feedback_recovery(void)
             assert(direction * (fold_ctrl.lower_ref - previous_ref) >= 0);
             assert(fabsf(fold_ctrl.lower_ref - previous_ref) <=
                    GIMBAL_LOWER_REF_RATE_RAD_S * 0.005f + 0.00001f);
-            assert(direction * lower_pitch_motor->angle_PID.Output >= 0);
+            assert(direction * (lower_pitch_motor->mit_config.position_des -
+                                lower_pitch_motor->measure.position) >= 0);
         }
         NEAR(lower_pitch_motor->pid_ref, GIMBAL_DEPLOY_LOWER_PITCH_TARGET_RAD);
-        assert(direction * lower_pitch_motor->angle_PID.Output > 0.5f);
-        assert(direction * lower_pitch_motor->speed_PID.Output > 0.5f);
-        printf("PASS lower Pitch reconnect: position=%.4f ref=%.4f angle_out=%.4f speed_out=%.4f\n",
+        NEAR(direction * (lower_pitch_motor->mit_config.position_des -
+                          lower_pitch_motor->measure.position),
+             direction * (GIMBAL_DEPLOY_LOWER_PITCH_TARGET_RAD -
+                          lower_pitch_motor->measure.control_position));
+        assert(direction * (lower_pitch_motor->mit_config.position_des -
+                            lower_pitch_motor->measure.position) > 0.05f);
+        printf("PASS lower Pitch reconnect: position=%.4f ref=%.4f mit_position=%.4f\n",
                lower_pitch_motor->measure.position, lower_pitch_motor->pid_ref,
-               lower_pitch_motor->angle_PID.Output, lower_pitch_motor->speed_PID.Output);
+               lower_pitch_motor->mit_config.position_des);
 
         positions[2] = GIMBAL_DEPLOY_LOWER_PITCH_TARGET_RAD;
         for (unsigned i = 0; i < 30; ++i) step();
@@ -616,7 +588,7 @@ static void lower_pitch_feedback_recovery(void)
     fresh[2] = 1;
     step();
     stopped();
-    puts("PASS lower Pitch feedback loss pauses output, holds upper Pitch, resets PID on recovery and respects remote stop");
+    puts("PASS lower Pitch feedback loss pauses output, holds upper Pitch, resumes from current position and respects remote stop");
 }
 
 static void lower_pitch_terminal_approach(void)
@@ -656,9 +628,11 @@ static void lower_pitch_terminal_approach(void)
                 NEAR(rate, GIMBAL_LOWER_REF_RATE_RAD_S);
                 saw_cruise = true;
             }
-            if (remaining > 0.02f && remaining < 0.03f)
+            if (remaining <= GIMBAL_LOWER_SLOWDOWN_DISTANCE_RAD &&
+                remaining > 0.005f)
             {
-                assert(rate > 0.05f && rate < 0.2f);
+                assert(rate >= GIMBAL_LOWER_FINAL_REF_RATE_RAD_S - 0.0001f &&
+                       rate <= GIMBAL_LOWER_REF_RATE_RAD_S + 0.0001f);
                 saw_slowdown = true;
             }
             if (remaining > 0.001f && remaining < 0.005f)
@@ -723,13 +697,11 @@ static void lower_pitch_switch_holds_load(void)
         fold_ctrl.state = initial_states[test];
         fold_ctrl.step = test < 2 ? FOLD_STEP_FINISH : FOLD_STEP_MOVE_LOWER_PITCH;
         fold_ctrl.lower_ref = ref;
-        DMMotorSetRef(lower_pitch_motor, ref);
-        DMMotorResetPIDState(lower_pitch_motor);
-        lower_pitch_motor->speed_PID.Iout = from_fold ? -0.6f : 0.2f;
+        SetLowerPitchRef(ref);
         DMMotorControl();
-        const float previous_integral = lower_pitch_motor->speed_PID.Iout;
-        const float previous_output = lower_pitch_motor->speed_PID.Output;
-        const uint16_t previous_torque = lower_pitch_motor->motor_send_mailbox.torque_des;
+        const float previous_position = lower_pitch_motor->mit_config.position_des;
+        const uint16_t previous_kp = lower_pitch_motor->motor_send_mailbox.Kp;
+        const uint16_t previous_kd = lower_pitch_motor->motor_send_mailbox.Kd;
 
         left_switch = from_fold ? RC_SW_MID : RC_SW_DOWN;
         step();
@@ -737,15 +709,15 @@ static void lower_pitch_switch_holds_load(void)
         assert(fold_ctrl.step == FOLD_STEP_LEVEL_UPPER_PITCH);
         assert(lower_pitch_motor->stop_flag == MOTOR_ENALBED);
         NEAR(lower_pitch_motor->pid_ref, ref);
-        NEAR(lower_pitch_motor->speed_PID.Iout, previous_integral);
-        NEAR(lower_pitch_motor->speed_PID.Output, previous_output);
-        assert(abs((int)lower_pitch_motor->motor_send_mailbox.torque_des - previous_torque) <= 1);
+        NEAR(lower_pitch_motor->mit_config.position_des, previous_position);
+        assert(lower_pitch_motor->motor_send_mailbox.Kp == previous_kp);
+        assert(lower_pitch_motor->motor_send_mailbox.Kd == previous_kd);
 
         for (unsigned i = 0; i < 60 && fold_ctrl.step != FOLD_STEP_MOVE_LOWER_PITCH; ++i)
         {
             step();
             NEAR(lower_pitch_motor->pid_ref, ref);
-            assert(fabsf(lower_pitch_motor->speed_PID.Output - previous_output) < 0.01f);
+            NEAR(lower_pitch_motor->mit_config.position_des, previous_position);
         }
         assert(fold_ctrl.step == FOLD_STEP_MOVE_LOWER_PITCH);
         step();
@@ -758,14 +730,15 @@ static void lower_pitch_switch_holds_load(void)
     dial_input = 400;
     step();
     stopped();
-    lower_pitch_motor->speed_PID.Iout = 0.6f;
     positions[2] = -2.65f;
     dial_input = 0;
     step();
     assert(fold_ctrl.active);
     NEAR(lower_pitch_motor->pid_ref, lower_pitch_motor->measure.position);
-    NEAR(lower_pitch_motor->speed_PID.Iout, 0);
-    puts("PASS lower Pitch switches: both directions and mid-motion reversals retain reference, load integral and CAN torque; stopped restart resets state");
+    NEAR(lower_pitch_motor->mit_config.position_des,
+         lower_pitch_motor->pid_ref + lower_pitch_motor->measure.position -
+             lower_pitch_motor->measure.control_position);
+    puts("PASS lower Pitch switches: both directions and mid-motion reversals retain the MIT target; stopped restart resets state");
 }
 #endif
 
@@ -789,7 +762,6 @@ static void lower_pitch_power_on_coordinate(void)
         0.5f * (GIMBAL_FOLD_LOWER_PITCH_TARGET_RAD + GIMBAL_DEPLOY_LOWER_PITCH_TARGET_RAD));
     NEAR(lower_pitch_motor->measure.position, 2.61635f);
     NEAR(lower_pitch_motor->measure.control_position, -3.666835f);
-    NEAR(DMMotorGetAngleMeasure(lower_pitch_motor, &lower_pitch_motor->motor_settings), -3.666835f);
 
     remote_active = 1;
     fresh[0] = fresh[1] = fresh[2] = 1;
@@ -814,23 +786,22 @@ static void lower_pitch_power_on_coordinate(void)
             stopped();
             NEAR(lower_pitch_motor->measure.position, raw_position);
             NEAR(lower_pitch_motor->measure.control_position, position);
-            NEAR(DMMotorGetAngleMeasure(lower_pitch_motor, &lower_pitch_motor->motor_settings), position);
 
-            lower_pitch_motor->speed_PID.Iout = -0.8f;
             dial_input = 0;
             step();
             assert(fold_ctrl.active);
             NEAR(fold_ctrl.lower_ref, position);
-            NEAR(lower_pitch_motor->angle_PID.Measure, position);
-            NEAR(lower_pitch_motor->speed_PID.Iout, 0);
             for (unsigned i = 0; i < 80; ++i) step();
             const float direction = target > position ? 1.0f : -1.0f;
             assert(direction * (lower_pitch_motor->pid_ref - position) > 0);
-            assert(direction * lower_pitch_motor->angle_PID.Output > 0.1f);
-            assert(direction * lower_pitch_motor->speed_PID.Output > 0.1f);
-            const float torque = uint_to_float(lower_pitch_motor->motor_send_mailbox.torque_des,
-                                               -DM4310_T_MAX, DM4310_T_MAX, 12);
-            assert(direction * torque > 0.1f);
+            NEAR(lower_pitch_motor->mit_config.position_des,
+                 lower_pitch_motor->pid_ref + lower_pitch_motor->measure.position - position);
+            NEAR(lower_pitch_commanded_position(), lower_pitch_motor->mit_config.position_des);
+            assert(lower_pitch_motor->mit_config.kp == GIMBAL_LOWER_PITCH_MIT_KP);
+            assert(lower_pitch_motor->mit_config.kd == GIMBAL_LOWER_PITCH_MIT_KD);
+            assert(lower_pitch_motor->mit_config.torque_des ==
+                   GIMBAL_LOWER_PITCH_MIT_TORQUE_FF_NM);
+            assert(direction * (lower_pitch_commanded_position() - raw_position) > 0.0f);
         }
     }
 
@@ -845,7 +816,7 @@ static void lower_pitch_power_on_coordinate(void)
         assert(GimbalTargetReached(LOWER_PITCH_DEPLOY));
         assert(fold_ctrl.state == GIMBAL_DEPLOYED);
     }
-    puts("PASS DM position coordinates: opt-in per motor, immediate center update, raw feedback retained, unconfigured multi-turn feedback unchanged; lower Pitch startup, angle/torque direction and arrival");
+    puts("PASS DM position coordinates: opt-in per motor, immediate center update, raw feedback retained, unconfigured multi-turn feedback unchanged; lower Pitch startup, MIT target direction and arrival");
 }
 #endif
 
@@ -1124,10 +1095,9 @@ int main(void)
     assert(yaw_motor->other_speed_feedback_ptr == &imu.Gyro[2]);
     assert(upper_pitch_motor->other_angle_feedback_ptr == &imu.Pitch);
     assert(upper_pitch_motor->other_speed_feedback_ptr == &imu.Gyro[0]);
-    assert(lower_pitch_motor->motor_settings.angle_feedback_source == MOTOR_FEED);
     assert(lower_pitch_motor->other_angle_feedback_ptr == NULL);
     assert(lower_pitch_motor->motor_can_instace->can_module_callback == DMMotorDecode);
-    assert(lower_pitch_motor->motor_settings.speed_feedback_source == MOTOR_FEED);
+    assert(lower_pitch_motor->control_mode == DMMOTOR_CONTROL_MIT);
     assert(yaw_motor->motor_type == DM4310 && upper_pitch_motor->motor_type == DM4310 &&
            lower_pitch_motor->motor_type == DM4310);
     calibration_keeps_motors_disabled();
@@ -1148,7 +1118,6 @@ int main(void)
     return 0;
 #endif
 #ifdef TEST_LOWER_PITCH_TUNING
-    lower_pitch_integral_unwind();
     lower_pitch_tuning();
     lower_pitch_feedback_recovery();
     lower_pitch_terminal_approach();
